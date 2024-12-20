@@ -9,6 +9,8 @@
 const assert = @import("std").debug.assert;
 const math = @import("std").math;
 
+const zlm = @import("zlm");
+
 fn radians(deg: f32) f32 {
     return deg * (math.pi / 180.0);
 }
@@ -99,6 +101,12 @@ pub const Vec3 = extern struct {
 
 pub const Mat4 = extern struct {
     m: [4][4]f32,
+
+    pub fn fromZlm(input: zlm.Mat4) @This() {
+        return .{
+            .m = input.fields,
+        };
+    }
 
     pub fn identity() Mat4 {
         return Mat4{

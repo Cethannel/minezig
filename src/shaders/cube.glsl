@@ -4,7 +4,7 @@
 //  NOTE: This source file also uses the '#pragma sokol' form of the
 //  custom tags.
 //------------------------------------------------------------------------------
-#pragma sokol @header const m = @import("zlm")
+#pragma sokol @header const m = @import("../math.zig")
 #pragma sokol @ctype mat4 m.Mat4
 
 #pragma sokol @vs vs
@@ -35,8 +35,7 @@ in vec2 uv;
 out vec4 frag_color;
 
 void main() {
-    frag_color = texture(sampler2D(tex, smp), uv);
-    //frag_color = vec4(uv.x, uv.y, 0.0, 1.0);
+    frag_color = texture(sampler2D(tex, smp), uv) * color;
 }
 #pragma sokol @end
 

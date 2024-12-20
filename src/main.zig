@@ -42,8 +42,8 @@ var state: struct {
     pip: sg.Pipeline = .{},
     bind: sg.Bindings = .{},
     pass_action: sg.PassAction = .{},
-    view: mat4 = mat4.createLookAt(.{ .x = 0.0, .y = 1.5, .z = 6.0 }, Vec3.zero, Vec3.unitY),
-    //view: mat4 = mat4.createLook(Vec3{ .x = 2.0, .y = 0.0, .z = 0.0 }, Vec3.unitX, Vec3.unitY),
+    //view: mat4 = mat4.createLookAt(.{ .x = 0.0, .y = 1.5, .z = 6.0 }, Vec3.zero, Vec3.unitY),
+    view: mat4 = mat4.createLook(Vec3{ .x = -2.0, .y = 0.0, .z = 0.0 }, Vec3.unitX, Vec3.unitY),
     numIndices: u32 = 0,
     allocator: std.mem.Allocator = undefined,
     lockedMouse: bool = false,
@@ -53,7 +53,7 @@ var state: struct {
     meshes: std.ArrayList(Mesh) = undefined,
     atlas: []u32 = undefined,
 
-    sensitivity: f32 = 0.1,
+    sensitivity: f32 = 0.001,
 
     colors: [3]Color = .{
         .{ .r = 0xf4, .g = 0x43, .b = 0x36 },
@@ -174,9 +174,14 @@ fn init() callconv(.C) void {
 
 fn frame() callconv(.C) void {
     const dt: f32 = @floatCast(sapp.frameDuration() * 60);
-    state.rx += state.dx * dt;
-    state.ry += state.dy * dt;
-    state.rz += state.dz * dt;
+
+    const pitch = state.mouseX;
+    const yaw = state.mouseY;
+
+    const offset = calcPos(pitch, yaw, state.dz);
+    state.rx -= offset.x * dt;
+    state.ry -= offset.y * dt;
+    state.rz -= offset.z * dt;
 
     sdtx.print("First\n", .{});
 
@@ -185,9 +190,9 @@ fn frame() callconv(.C) void {
     for (state.meshes.items) |mesh| {
         sg.applyBindings(mesh.bind);
         const vs_params = computeVsParams(
-            state.rx + mesh.offset.x,
-            state.ry + mesh.offset.y,
-            state.rz + mesh.offset.z,
+            mesh.offset.x,
+            mesh.offset.y,
+            mesh.offset.z,
         );
         sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
         sg.draw(0, mesh.numIndices, 1);
@@ -225,19 +230,19 @@ fn computeVsParams(rx: f32, ry: f32, rz: f32) shd.VsParams {
     sdtx.font(KC854);
     sdtx.color3b(color.r, color.g, color.b);
 
-    const look = mat4.mul(state.view, lookY);
+    const translationVec3 = Vec3{ .x = state.rx, .y = state.ry, .z = state.rz };
 
-    const newView = mat4.mul(look, lookX);
+    const thing = translationVec3;
 
-    const mx = rx * @cos(state.mouseX) - ry * @sin(state.mouseX);
-    const mz = rx * @sin(state.mouseX) + rz * @cos(state.mouseX);
+    const translation = mat4.createTranslation(thing);
 
-    const rm = mat4.createTranslation(.{ .x = mx, .y = ry, .z = mz });
-    const scaleFactor = mat4.createTranslation(Vec3.one.scale(0.01));
-    const model = mat4.mul(rm, scaleFactor);
+    const model = mat4.createTranslationXYZ(rx, ry, rz).mul(translation);
     const aspect = sapp.widthf() / sapp.heightf();
-    const proj = mat4.createPerspective(60.0, aspect, 0.01, 100000.0);
-    return shd.VsParams{ .mvp = mat4.mul(mat4.mul(proj, newView), model) };
+    const proj = mat4.createPerspective(zlm.toRadians(60.0), aspect, 0.01, 1000.0);
+    const view = state.view.mul(lookX).mul(lookY);
+    const mvp = model.mul(view).mul(proj);
+    //return shd.VsParams{ .mvp = mat4.mul(mat4.mul(proj, newView), model) };
+    return shd.VsParams{ .mvp = math.Mat4.fromZlm(mvp) };
 }
 
 fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
@@ -393,4 +398,19 @@ fn createMesh(offset: Vec3) Mesh {
     });
 
     return mesh;
+}
+
+fn calcPos(pitch: f32, yaw: f32, offset: f32) Vec3 {
+    const pitchRadian = pitch; // zlm.toRadians(pitch);
+    const yawRadian = yaw; // zlm.toRadians(yaw);
+
+    const newPosX = offset * @sin(yawRadian) * @cos(pitchRadian);
+    const newPosY = offset * -@sin(pitchRadian);
+    const newPosZ = offset * @cos(yawRadian) * @cos(pitchRadian);
+
+    return .{
+        .x = newPosX,
+        .y = newPosY,
+        .z = newPosZ,
+    };
 }
