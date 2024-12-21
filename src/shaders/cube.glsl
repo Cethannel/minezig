@@ -14,12 +14,15 @@ layout(binding=0) uniform vs_params {
 
 in vec4 pos;
 in vec2 texcoord0;
+in vec4 normal0;
 
 out vec2 uv;
+out vec4 normal;
 
 void main() {
     gl_Position = mvp * pos;
     uv = texcoord0;
+    normal = normal0;
 }
 #pragma sokol @end
 
@@ -28,6 +31,7 @@ layout(binding=0) uniform texture2D tex;
 layout(binding=0) uniform sampler smp;
 
 in vec2 uv;
+in vec4 normal;
 out vec4 frag_color;
 
 void main() {

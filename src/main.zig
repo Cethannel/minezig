@@ -6,6 +6,8 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
 
+const chunks = @import("chunks.zig");
+
 const textures = @import("textures.zig");
 
 const math = @import("math.zig");
@@ -26,7 +28,7 @@ const window_h = 720;
 
 const Color = struct { r: u8, g: u8, b: u8 };
 
-const Mesh = struct {
+pub const Mesh = struct {
     bind: sg.Bindings = .{},
     offset: Vec3,
     numIndices: u32,
@@ -66,44 +68,47 @@ var state: struct {
     },
 } = .{};
 
-const Vertex = extern struct {
+pub const Vertex = extern struct {
     x: f32,
     y: f32,
     z: f32,
     u: f32,
     v: f32,
+    nx: f32,
+    ny: f32,
+    nz: f32,
 };
 
 const vertices = [_]Vertex{
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0 },
+    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
+    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
+    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
+    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
 
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0 },
+    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
+    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
+    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
+    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
 
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
+    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
+    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
+    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
 
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1 },
+    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
+    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
+    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
+    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
 
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
+    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
+    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
+    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
 
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
+    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
+    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
+    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
 };
 
 pub fn main() !void {
@@ -142,7 +147,7 @@ fn init() callconv(.C) void {
     state.meshes = std.ArrayList(Mesh).init(state.allocator);
 
     state.meshes.append(createMesh(Vec3.zero)) catch unreachable;
-    state.meshes.append(createMesh(Vec3.unitY)) catch unreachable;
+    state.meshes.append(createMesh(Vec3.new(16.0, 0.0, 0.0))) catch unreachable;
 
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
@@ -151,16 +156,17 @@ fn init() callconv(.C) void {
 
     // create a shader and pipeline object
     var pip_desc: sg.PipelineDesc = .{
-        .index_type = .UINT16,
+        .index_type = .UINT32,
         .shader = sg.makeShader(shd.texcubeShaderDesc(sg.queryBackend())),
         .depth = .{
             .compare = .LESS_EQUAL,
             .write_enabled = true,
         },
-        .cull_mode = .NONE,
+        .cull_mode = .BACK,
     };
     pip_desc.layout.attrs[shd.ATTR_texcube_pos].format = .FLOAT3;
     pip_desc.layout.attrs[shd.ATTR_texcube_texcoord0].format = .FLOAT2;
+    pip_desc.layout.attrs[shd.ATTR_texcube_normal0].format = .FLOAT3;
     state.pip = sg.makePipeline(pip_desc);
 
     var sdtx_desc: sdtx.Desc = .{ .logger = .{ .func = slog.func } };
@@ -197,8 +203,8 @@ fn frame() callconv(.C) void {
     );
 
     sdtx.print("First\n", .{});
-    sdtx.print("Pitch: {d}\n", .{state.pitch});
-    sdtx.print("Yaw: {d}\n", .{state.yaw});
+
+    sdtx.print("Dt is: {d}\n", .{1.0 / sapp.frameDuration()});
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
@@ -314,58 +320,6 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
     }
 }
 
-fn genCube(offset: Vec3, indexOffset: u16) struct {
-    vertices: [6 * 4]Vertex,
-    indices: [6 * 6]u16,
-    maxIndex: u16,
-} {
-    var outVert = vertices;
-
-    for (&outVert) |*vertex| {
-        vertex.x += offset.x;
-        vertex.y += offset.y;
-        vertex.z += offset.z;
-
-        const numTexs: f32 = @floatFromInt(state.atlas.len / 32 / 32);
-
-        vertex.v /= numTexs;
-
-        if (!offset.eql(Vec3.zero)) {
-            vertex.v += 1.0 / numTexs;
-        }
-    }
-
-    std.log.info("Starting at index {}", .{indexOffset});
-
-    var outIndex = [_]u16{
-        0,  1,  2,  0,  2,  3,
-        6,  5,  4,  7,  6,  4,
-        8,  9,  10, 8,  10, 11,
-        14, 13, 12, 15, 14, 12,
-        16, 17, 18, 16, 18, 19,
-        22, 21, 20, 23, 22, 20,
-    };
-
-    var maxIndex: u16 = 0;
-
-    for (&outIndex) |*index| {
-        index.* += indexOffset;
-        if (index.* > maxIndex) {
-            maxIndex = index.*;
-        }
-    }
-
-    maxIndex += 1;
-
-    return .{
-        .vertices = outVert,
-        .indices = outIndex,
-        .maxIndex = maxIndex,
-    };
-}
-
-fn genChunk() struct { vertices: std.ArrayList(Vertex), indices: std.ArrayList(u16) } {}
-
 fn createMesh(offset: Vec3) Mesh {
     var mesh: Mesh = .{
         .offset = offset,
@@ -381,35 +335,24 @@ fn createMesh(offset: Vec3) Mesh {
 
     mesh.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
-    const cube1 = genCube(Vec3.zero, 0);
-    std.debug.print("Cube1: {any}", .{cube1});
-    const cube2 = genCube(Vec3.new(2.0, 0.0, 0.0), @intCast(cube1.maxIndex));
+    const chunk = chunks.Chunk.gen_solid_chunk().gen_mesh(state.allocator) catch unreachable;
 
-    const verticesToRender = cube1.vertices ++ cube2.vertices;
+    const verticesToRender = chunk.vertices.items;
 
     std.log.info("Has num verts: {}", .{verticesToRender.len});
 
-    const len = (@sizeOf(Vertex) * verticesToRender.len / 4);
-
-    std.log.info(
-        "Vertices: {any}",
-        .{@as(*const [len]f32, @ptrCast(&verticesToRender))},
-    );
-
     // create vertex buffer with triangle vertices
     mesh.bind.vertex_buffers[0] = sg.makeBuffer(.{
-        .data = sg.asRange(&verticesToRender),
+        .data = sg.asRange(verticesToRender),
     });
 
-    const indices = cube1.indices ++ cube2.indices;
+    const indices = chunk.indices.items;
 
     mesh.numIndices = @intCast(indices.len);
 
-    std.log.info("Indices ({}): {any}", .{ indices.len, indices });
-
     mesh.bind.index_buffer = sg.makeBuffer(.{
         .type = .INDEXBUFFER,
-        .data = sg.asRange(&indices),
+        .data = sg.asRange(indices),
     });
 
     return mesh;
