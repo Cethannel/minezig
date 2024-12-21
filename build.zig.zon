@@ -23,10 +23,6 @@
             .url = "https://github.com/zigimg/zigimg/archive/5b5d718159c6ec223a54c9bb960690576e5df9c2.tar.gz",
             .hash = "122040d9cc905342547e1e9da227a7f16fae5e7ae23134cb62aaef64c5b2c4f58828",
         },
-        .zm = .{
-            .url = "git+https://github.com/griush/zm#39ff1bfb21a141020b07fb08865b3d934d87c99a",
-            .hash = "1220897b0db58d1867fef1672a72f886f27af6a22e561797c48c9f793b06961c60ab",
-        },
         .zlm = .{
             .url = "git+https://github.com/Cethannel/zlm#75f7f60c3ea212cbda2d0941c968cded692bbf0a",
             .hash = "12207c4015ee2d8352879e0950f644595e1082e6606db3ca2f88db54e74d8fb11e2f",

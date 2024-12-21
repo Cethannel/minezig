@@ -33,17 +33,12 @@ const Mesh = struct {
 };
 
 var state: struct {
-    rx: f32 = 0.0,
-    ry: f32 = 0.0,
-    rz: f32 = 0.0,
     dx: f32 = 0.0,
     dy: f32 = 0.0,
     dz: f32 = 0.0,
     pip: sg.Pipeline = .{},
     bind: sg.Bindings = .{},
     pass_action: sg.PassAction = .{},
-    //view: mat4 = mat4.createLookAt(.{ .x = 0.0, .y = 1.5, .z = 6.0 }, Vec3.zero, Vec3.unitY),
-    view: mat4 = mat4.createLook(Vec3{ .x = -2.0, .y = 0.0, .z = 0.0 }, Vec3.unitX, Vec3.unitY),
     numIndices: u32 = 0,
     allocator: std.mem.Allocator = undefined,
     lockedMouse: bool = false,
@@ -53,7 +48,16 @@ var state: struct {
     meshes: std.ArrayList(Mesh) = undefined,
     atlas: []u32 = undefined,
 
-    sensitivity: f32 = 0.001,
+    cameraPos: Vec3 = Vec3.new(0.0, 0.0, 3.0),
+    cameraFront: Vec3 = Vec3.new(0.0, 0.0, -1.0),
+    cameraUp: Vec3 = Vec3.new(0.0, 1.0, 0.0),
+
+    pitch: f32 = -180,
+    yaw: f32 = 90.0,
+
+    initialMouse: bool = true,
+
+    sensitivity: f32 = 0.1,
 
     colors: [3]Color = .{
         .{ .r = 0xf4, .g = 0x43, .b = 0x36 },
@@ -66,41 +70,40 @@ const Vertex = extern struct {
     x: f32,
     y: f32,
     z: f32,
-    color: u32,
     u: f32,
     v: f32,
 };
 
 const vertices = [_]Vertex{
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .color = 0xFF0000FF, .u = 0, .v = 0 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .color = 0xFF0000FF, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .color = 0xFF0000FF, .u = 1, .v = 1 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .color = 0xFF0000FF, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1 },
+    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1 },
+    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0 },
+    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0 },
 
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .color = 0xFF00FF00, .u = 0, .v = 0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .color = 0xFF00FF00, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .color = 0xFF00FF00, .u = 1, .v = 1 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .color = 0xFF00FF00, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1 },
+    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1 },
+    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0 },
+    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0 },
 
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .color = 0xFFFF0000, .u = 0, .v = 0 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .color = 0xFFFF0000, .u = 1, .v = 0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .color = 0xFFFF0000, .u = 1, .v = 1 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .color = 0xFFFF0000, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1 },
+    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0 },
+    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0 },
+    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1 },
 
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .color = 0xFFFF007F, .u = 0, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .color = 0xFFFF007F, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .color = 0xFFFF007F, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .color = 0xFFFF007F, .u = 0, .v = 1 },
+    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0 },
+    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0 },
+    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1 },
+    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1 },
 
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .color = 0xFFFF7F00, .u = 0, .v = 0 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .color = 0xFFFF7F00, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .color = 0xFFFF7F00, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .color = 0xFFFF7F00, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0 },
+    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 1, .v = 0 },
+    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1 },
+    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1 },
 
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .color = 0xFF007FFF, .u = 0, .v = 0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .color = 0xFF007FFF, .u = 1, .v = 0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .color = 0xFF007FFF, .u = 1, .v = 1 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .color = 0xFF007FFF, .u = 0, .v = 1 },
+    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0 },
+    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0 },
+    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1 },
+    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 0, .v = 1 },
 };
 
 pub fn main() !void {
@@ -157,7 +160,6 @@ fn init() callconv(.C) void {
         .cull_mode = .NONE,
     };
     pip_desc.layout.attrs[shd.ATTR_texcube_pos].format = .FLOAT3;
-    pip_desc.layout.attrs[shd.ATTR_texcube_color0].format = .UBYTE4N;
     pip_desc.layout.attrs[shd.ATTR_texcube_texcoord0].format = .FLOAT2;
     state.pip = sg.makePipeline(pip_desc);
 
@@ -175,15 +177,28 @@ fn init() callconv(.C) void {
 fn frame() callconv(.C) void {
     const dt: f32 = @floatCast(sapp.frameDuration() * 60);
 
-    const pitch = state.mouseX;
-    const yaw = state.mouseY;
+    if (state.pitch > 89.0) {
+        state.pitch = 89.0;
+    }
+    if (state.pitch > -89.0) {
+        state.pitch = -89.0;
+    }
 
-    const offset = calcPos(pitch, yaw, state.dz);
-    state.rx -= offset.x * dt;
-    state.ry -= offset.y * dt;
-    state.rz -= offset.z * dt;
+    var direction: Vec3 = undefined;
+    direction.x = @cos(zlm.toRadians(state.yaw)) * @cos(zlm.toRadians(state.pitch));
+    direction.y = @sin(zlm.toRadians(state.pitch));
+    direction.z = @sin(zlm.toRadians(state.yaw)) * @cos(zlm.toRadians(state.pitch));
+    state.cameraFront = direction.normalize();
+
+    //const lookY = mat4.createAngleAxis(Vec3.unitX, state.mouseY);
+    state.cameraPos = state.cameraPos.add(state.cameraFront.scale(state.dz * dt));
+    state.cameraPos = state.cameraPos.sub(
+        state.cameraFront.cross(state.cameraUp).normalize().scale(state.dx * dt),
+    );
 
     sdtx.print("First\n", .{});
+    sdtx.print("Pitch: {d}\n", .{state.pitch});
+    sdtx.print("Yaw: {d}\n", .{state.yaw});
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
@@ -223,23 +238,19 @@ fn cleanup() callconv(.C) void {
 }
 
 fn computeVsParams(rx: f32, ry: f32, rz: f32) shd.VsParams {
-    const lookX = mat4.createAngleAxis(Vec3.unitY, state.mouseX * state.sensitivity);
-    const lookY = mat4.createAngleAxis(Vec3.unitX, state.mouseY * state.sensitivity);
-
     const color = state.colors[KC854];
     sdtx.font(KC854);
     sdtx.color3b(color.r, color.g, color.b);
 
-    const translationVec3 = Vec3{ .x = state.rx, .y = state.ry, .z = state.rz };
+    const view = mat4.createLookAt(
+        state.cameraPos,
+        state.cameraPos.add(state.cameraFront),
+        state.cameraUp,
+    );
 
-    const thing = translationVec3;
-
-    const translation = mat4.createTranslation(thing);
-
-    const model = mat4.createTranslationXYZ(rx, ry, rz).mul(translation);
+    const model = mat4.createTranslationXYZ(rx, ry, rz);
     const aspect = sapp.widthf() / sapp.heightf();
     const proj = mat4.createPerspective(zlm.toRadians(60.0), aspect, 0.01, 1000.0);
-    const view = state.view.mul(lookX).mul(lookY);
     const mvp = model.mul(view).mul(proj);
     //return shd.VsParams{ .mvp = mat4.mul(mat4.mul(proj, newView), model) };
     return shd.VsParams{ .mvp = math.Mat4.fromZlm(mvp) };
@@ -287,8 +298,16 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
         },
         .MOUSE_MOVE => {
             if (sapp.mouseLocked()) {
-                state.mouseX += event.mouse_dx;
-                state.mouseY += event.mouse_dy;
+                state.mouseX += event.mouse_dx * state.sensitivity;
+                state.mouseY += event.mouse_dy * state.sensitivity;
+
+                if (state.initialMouse) {
+                    state.initialMouse = false;
+                    return;
+                }
+
+                state.yaw += event.mouse_dx * state.sensitivity;
+                state.pitch += event.mouse_dy * state.sensitivity;
             }
         },
         else => {},
@@ -306,10 +325,6 @@ fn genCube(offset: Vec3, indexOffset: u16) struct {
         vertex.x += offset.x;
         vertex.y += offset.y;
         vertex.z += offset.z;
-
-        if (!offset.eql(Vec3.zero)) {
-            vertex.color = 0xFFFFFFFF;
-        }
 
         const numTexs: f32 = @floatFromInt(state.atlas.len / 32 / 32);
 
