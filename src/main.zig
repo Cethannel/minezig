@@ -29,7 +29,8 @@ const window_h = 720;
 const Color = struct { r: u8, g: u8, b: u8 };
 
 pub const Mesh = struct {
-    bind: sg.Bindings = .{},
+    vertexBuffer: sg.Buffer,
+    indexBuffer: sg.Buffer,
     offset: Vec3,
     numIndices: u32,
 };
@@ -47,8 +48,9 @@ var state: struct {
     mouseX: f32 = 0.0,
     mouseY: f32 = 0.0,
     text_pass_action: sg.PassAction = .{},
-    meshes: std.ArrayList(Mesh) = undefined,
     atlas: []u32 = undefined,
+
+    chunkMap: chunks.ChunkMap = undefined,
 
     cameraPos: Vec3 = Vec3.new(0.0, 0.0, 3.0),
     cameraFront: Vec3 = Vec3.new(0.0, 0.0, -1.0),
@@ -120,12 +122,13 @@ pub fn main() !void {
         .frame_cb = frame,
         .cleanup_cb = cleanup,
         .event_cb = event_cb,
-        .width = 640,
-        .height = 480,
+        .width = window_w,
+        .height = window_h,
         .icon = .{ .sokol_default = true },
         .window_title = "triangle.zig",
         .sample_count = 4,
         .logger = .{ .func = slog.func },
+        .swap_interval = 0,
     });
 
     if (gpa.deinit() == .leak) {
@@ -137,6 +140,7 @@ fn init() callconv(.C) void {
     sg.setup(.{
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
+        .buffer_pool_size = 1024 * 4,
     });
 
     state.atlas = textures.createAtlas(&.{
@@ -144,10 +148,25 @@ fn init() callconv(.C) void {
         "assets/textures/dirt.png",
     }, state.allocator) catch unreachable;
 
-    state.meshes = std.ArrayList(Mesh).init(state.allocator);
+    var img_desc: sg.ImageDesc = .{
+        .width = 32,
+        .height = @intCast(state.atlas.len / 32),
+    };
+    img_desc.data.subimage[0][0] = sg.asRange(state.atlas);
+    state.bind.images[shd.IMG_tex] = sg.makeImage(img_desc);
 
-    state.meshes.append(createMesh(Vec3.zero)) catch unreachable;
-    state.meshes.append(createMesh(Vec3.new(16.0, 0.0, 0.0))) catch unreachable;
+    state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
+
+    state.chunkMap = chunks.ChunkMap.init(state.allocator);
+
+    for (0..4) |x| {
+        for (0..4) |z| {
+            const sx: i64 = @intCast(x);
+            const sz: i64 = @intCast(z);
+            state.chunkMap.genChunk(chunks.IVec3.new(sx - 2, 0, sz - 2)) catch unreachable;
+            state.chunkMap.genMesh(chunks.IVec3.new(sx - 2, 0, sz - 2)) catch unreachable;
+        }
+    }
 
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
@@ -196,11 +215,15 @@ fn frame() callconv(.C) void {
     direction.z = @sin(zlm.toRadians(state.yaw)) * @cos(zlm.toRadians(state.pitch));
     state.cameraFront = direction.normalize();
 
+    const nonY = Vec3.new(1.0, 0.0, 1.0);
+
     //const lookY = mat4.createAngleAxis(Vec3.unitX, state.mouseY);
-    state.cameraPos = state.cameraPos.add(state.cameraFront.scale(state.dz * dt));
+    state.cameraPos = state.cameraPos.add(state.cameraFront.scale(state.dz * dt).mul(nonY));
     state.cameraPos = state.cameraPos.sub(
-        state.cameraFront.cross(state.cameraUp).normalize().scale(state.dx * dt),
+        state.cameraFront.cross(state.cameraUp).normalize().scale(state.dx * dt).mul(nonY),
     );
+
+    state.cameraPos = state.cameraPos.add(Vec3.new(0.0, state.dy * dt, 0.0));
 
     sdtx.print("First\n", .{});
 
@@ -208,15 +231,25 @@ fn frame() callconv(.C) void {
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
-    for (state.meshes.items) |mesh| {
-        sg.applyBindings(mesh.bind);
-        const vs_params = computeVsParams(
-            mesh.offset.x,
-            mesh.offset.y,
-            mesh.offset.z,
-        );
-        sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-        sg.draw(0, mesh.numIndices, 1);
+
+    var chunkIter = state.chunkMap.map.iterator();
+
+    while (chunkIter.next()) |entry| {
+        const pos = entry.key_ptr;
+        const chunk = entry.value_ptr;
+        if (chunk.mesh) |mesh| {
+            state.bind.vertex_buffers[0] = mesh.vertexBuffer;
+            state.bind.index_buffer = mesh.indexBuffer;
+
+            sg.applyBindings(state.bind);
+            const vs_params = computeVsParams(
+                @floatFromInt(pos.x * 16),
+                @floatFromInt(pos.y * 16),
+                @floatFromInt(pos.z * 16),
+            );
+            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+            sg.draw(0, @intCast(mesh.indices.items.len), 1);
+        }
     }
     sg.endPass();
 
@@ -238,7 +271,7 @@ fn frame() callconv(.C) void {
 }
 
 fn cleanup() callconv(.C) void {
-    state.meshes.deinit();
+    state.chunkMap.deinit();
     state.allocator.free(state.atlas);
     sg.shutdown();
 }
@@ -289,10 +322,10 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
                     state.dz -= change;
                 },
                 .SPACE => {
-                    state.dy -= change;
+                    state.dy += change;
                 },
                 .LEFT_SHIFT => {
-                    state.dy += change;
+                    state.dy -= change;
                 },
                 .ESCAPE => {
                     if (event.type == .KEY_DOWN) {
@@ -324,25 +357,16 @@ fn createMesh(offset: Vec3) Mesh {
     var mesh: Mesh = .{
         .offset = offset,
         .numIndices = 0,
+        .indexBuffer = undefined,
+        .vertexBuffer = undefined,
     };
-
-    var img_desc: sg.ImageDesc = .{
-        .width = 32,
-        .height = @intCast(state.atlas.len / 32),
-    };
-    img_desc.data.subimage[0][0] = sg.asRange(state.atlas);
-    mesh.bind.images[shd.IMG_tex] = sg.makeImage(img_desc);
-
-    mesh.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
     const chunk = chunks.Chunk.gen_solid_chunk().gen_mesh(state.allocator) catch unreachable;
 
     const verticesToRender = chunk.vertices.items;
 
-    std.log.info("Has num verts: {}", .{verticesToRender.len});
-
     // create vertex buffer with triangle vertices
-    mesh.bind.vertex_buffers[0] = sg.makeBuffer(.{
+    mesh.vertexBuffer = sg.makeBuffer(.{
         .data = sg.asRange(verticesToRender),
     });
 
@@ -350,7 +374,7 @@ fn createMesh(offset: Vec3) Mesh {
 
     mesh.numIndices = @intCast(indices.len);
 
-    mesh.bind.index_buffer = sg.makeBuffer(.{
+    mesh.indexBuffer = sg.makeBuffer(.{
         .type = .INDEXBUFFER,
         .data = sg.asRange(indices),
     });
@@ -371,4 +395,8 @@ fn calcPos(pitch: f32, yaw: f32, offset: f32) Vec3 {
         .y = newPosY,
         .z = newPosZ,
     };
+}
+
+test {
+    @import("std").testing.refAllDecls(@This());
 }

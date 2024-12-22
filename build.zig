@@ -23,6 +23,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    const zigimg_dependency = b.dependency("zigimg", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const zlm = b.dependency("zlm", .{});
+
     const exe = b.addExecutable(.{
         .name = "sokol-test",
         .root_source_file = b.path("src/main.zig"),
@@ -31,14 +38,8 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("sokol", dep_sokol.module("sokol"));
 
-    const zigimg_dependency = b.dependency("zigimg", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
-    const zlm = b.dependency("zlm", .{});
     exe.root_module.addImport("zlm", zlm.module("zlm"));
 
     // This declares intent for the executable to be installed into the
@@ -76,6 +77,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    exe_unit_tests.root_module.addImport("sokol", dep_sokol.module("sokol"));
+
+    exe_unit_tests.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
+
+    exe_unit_tests.root_module.addImport("zlm", zlm.module("zlm"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

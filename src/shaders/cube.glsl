@@ -14,10 +14,10 @@ layout(binding=0) uniform vs_params {
 
 in vec4 pos;
 in vec2 texcoord0;
-in vec4 normal0;
+in vec3 normal0;
 
 out vec2 uv;
-out vec4 normal;
+out vec3 normal;
 
 void main() {
     gl_Position = mvp * pos;
@@ -31,7 +31,7 @@ layout(binding=0) uniform texture2D tex;
 layout(binding=0) uniform sampler smp;
 
 in vec2 uv;
-in vec4 normal;
+in vec3 normal;
 out vec4 frag_color;
 
 void main() {
