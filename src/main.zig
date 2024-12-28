@@ -1,10 +1,17 @@
 const std = @import("std");
 const sokol = @import("sokol");
+const ig = @import("cimgui");
 const sapp = sokol.app;
+const simgui = sokol.imgui;
 const sg = sokol.gfx;
 const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
+
+const Thread = std.Thread;
+
+const IZlm = zlm.SpecializeOn(i64);
+pub const IVec3 = IZlm.Vec3;
 
 const chunks = @import("chunks.zig");
 
@@ -18,6 +25,8 @@ const mat4 = zlm.Mat4;
 
 //const shd = @import("shaders/triangle.glsl.zig");
 const shd = @import("shaders/cube.glsl.zig");
+
+const blocks = @import("blocks.zig");
 
 const KC854 = 0;
 const C64 = 1;
@@ -35,7 +44,7 @@ pub const Mesh = struct {
     numIndices: u32,
 };
 
-var state: struct {
+const State = struct {
     dx: f32 = 0.0,
     dy: f32 = 0.0,
     dz: f32 = 0.0,
@@ -52,7 +61,7 @@ var state: struct {
 
     chunkMap: chunks.ChunkMap = undefined,
 
-    cameraPos: Vec3 = Vec3.new(0.0, 0.0, 3.0),
+    cameraPos: Vec3 = Vec3.new(0.0, 129.0, 3.0),
     cameraFront: Vec3 = Vec3.new(0.0, 0.0, -1.0),
     cameraUp: Vec3 = Vec3.new(0.0, 1.0, 0.0),
 
@@ -63,12 +72,46 @@ var state: struct {
 
     sensitivity: f32 = 0.1,
 
+    genChunkQueue: genChunkQueueT = undefined,
+    genChunkMeshQueue: genChunkQueueT = undefined,
+
+    blocksArr: std.ArrayList(blocks.Block) = undefined,
+
     colors: [3]Color = .{
         .{ .r = 0xf4, .g = 0x43, .b = 0x36 },
         .{ .r = 0x21, .g = 0x96, .b = 0xf3 },
         .{ .r = 0x4c, .g = 0xaf, .b = 0x50 },
     },
-} = .{};
+
+    gpa: GPA = undefined,
+
+    renderDistance: u8 = 16,
+
+    textureMap: std.StringHashMap(u32) = undefined,
+
+    const GPA = std.heap.GeneralPurposeAllocator(.{
+        .enable_memory_limit = true,
+    });
+
+    const genChunkContext = struct {
+        playerPos: Vec3,
+    };
+
+    pub const genChunkQueueT = std.PriorityQueue(IVec3, genChunkContext, compChunks);
+
+    fn compChunks(ctx: genChunkContext, a: IVec3, b: IVec3) std.math.Order {
+        _ = ctx;
+        const ia = ivec3ToVec3(a);
+        const ib = ivec3ToVec3(b);
+
+        const ad = state.cameraPos.distance(ia);
+        const bd = state.cameraPos.distance(ib);
+
+        return std.math.order(ad, bd);
+    }
+};
+
+pub var state: State = .{};
 
 pub const Vertex = extern struct {
     x: f32,
@@ -81,41 +124,12 @@ pub const Vertex = extern struct {
     nz: f32,
 };
 
-const vertices = [_]Vertex{
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
-
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
-
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
-
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
-
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
-
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
-};
-
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = State.GPA{
+        .requested_memory_limit = 8 * 1024 * 1024 * 1024,
+    };
     state.allocator = gpa.allocator();
+    state.gpa = gpa;
 
     sapp.run(.{
         .init_cb = init,
@@ -131,6 +145,10 @@ pub fn main() !void {
         .swap_interval = 0,
     });
 
+    std.log.info("Total memory requested: {}", .{
+        gpa.total_requested_bytes,
+    });
+
     if (gpa.deinit() == .leak) {
         std.log.err("Memory leak", .{});
     }
@@ -143,10 +161,27 @@ fn init() callconv(.C) void {
         .buffer_pool_size = 1024 * 4,
     });
 
-    state.atlas = textures.createAtlas(&.{
-        "assets/textures/bricks.png",
-        "assets/textures/dirt.png",
-    }, state.allocator) catch unreachable;
+    simgui.setup(.{
+        .logger = .{ .func = slog.func },
+    });
+
+    state.textureMap = std.StringHashMap(u32).init(state.allocator);
+
+    state.blocksArr = std.ArrayList(blocks.Block).init(state.allocator);
+
+    defaultBlocks() catch unreachable;
+
+    const blockTextures = textures.registerBlocks(state.blocksArr.items) catch unreachable;
+
+    defer state.allocator.free(blockTextures);
+
+    for (blockTextures, 0..) |blkName, i| {
+        const name = blkName["assets/textures/".len..];
+        std.log.info("Adding texture name: {s}", .{name});
+        state.textureMap.put(name, @intCast(i)) catch unreachable;
+    }
+
+    state.atlas = textures.createAtlas(blockTextures, state.allocator) catch unreachable;
 
     var img_desc: sg.ImageDesc = .{
         .width = 32,
@@ -157,14 +192,21 @@ fn init() callconv(.C) void {
 
     state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
+    state.genChunkQueue = State.genChunkQueueT.init(state.allocator, .{
+        .playerPos = state.cameraPos,
+    });
+
+    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, .{
+        .playerPos = state.cameraPos,
+    });
+
     state.chunkMap = chunks.ChunkMap.init(state.allocator);
 
     for (0..4) |x| {
         for (0..4) |z| {
             const sx: i64 = @intCast(x);
             const sz: i64 = @intCast(z);
-            state.chunkMap.genChunk(chunks.IVec3.new(sx - 2, 0, sz - 2)) catch unreachable;
-            state.chunkMap.genMesh(chunks.IVec3.new(sx - 2, 0, sz - 2)) catch unreachable;
+            state.genChunkQueue.add(IVec3.new(sx - 2, 0, sz - 2)) catch unreachable;
         }
     }
 
@@ -200,6 +242,13 @@ fn init() callconv(.C) void {
 }
 
 fn frame() callconv(.C) void {
+    simgui.newFrame(.{
+        .width = sapp.width(),
+        .height = sapp.height(),
+        .delta_time = sapp.frameDuration(),
+        .dpi_scale = sapp.dpiScale(),
+    });
+
     const dt: f32 = @floatCast(sapp.frameDuration() * 60);
 
     if (state.pitch > 89.0) {
@@ -227,10 +276,29 @@ fn frame() callconv(.C) void {
 
     sdtx.print("First\n", .{});
 
-    sdtx.print("Dt is: {d}\n", .{1.0 / sapp.frameDuration()});
+    sdtx.print("Dt is: {d:.2}\n", .{1.0 / sapp.frameDuration()});
+
+    while (state.genChunkQueue.removeOrNull()) |chunkPos| {
+        state.chunkMap.genChunk(chunkPos) catch unreachable;
+        state.genChunkMeshQueue.add(chunkPos) catch unreachable;
+    }
+
+    while (state.genChunkMeshQueue.removeOrNull()) |chunkPos| {
+        state.chunkMap.genMesh(chunkPos) catch unreachable;
+    }
+
+    if (1.0 / sapp.frameDuration() > 60.0) {
+        chunks.renderDistanceGen() catch unreachable;
+    }
 
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
+
+    ig.igSetNextWindowPos(.{ .x = 400, .y = 10 }, ig.ImGuiCond_Once);
+    ig.igSetNextWindowSize(.{ .x = 400, .y = 100 }, ig.ImGuiCond_Once);
+    _ = ig.igBegin("Hello Dear ImGui!", 0, ig.ImGuiWindowFlags_None);
+    _ = ig.igColorEdit3("Background", &state.pass_action.colors[0].clear_value.r, ig.ImGuiColorEditFlags_None);
+    ig.igEnd();
 
     var chunkIter = state.chunkMap.map.iterator();
 
@@ -261,16 +329,31 @@ fn frame() callconv(.C) void {
         sdtx.color3b(color.r, color.g, color.b);
         sdtx.print("Hello '{s}'!\n", .{"there"});
     }
+
+    sdtx.print("Currently using: {}", .{state.gpa.total_requested_bytes});
     sdtx.font(KC854);
     sdtx.color3b(255, 128, 0);
 
     sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
     sdtx.draw();
     sg.endPass();
+
+    sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
+    simgui.render();
+    sg.endPass();
+
     sg.commit();
 }
 
 fn cleanup() callconv(.C) void {
+    for (state.blocksArr.items) |*blk| {
+        blk.deinit();
+    }
+
+    state.blocksArr.deinit();
+
+    state.genChunkQueue.deinit();
+    state.genChunkMeshQueue.deinit();
     state.chunkMap.deinit();
     state.allocator.free(state.atlas);
     sg.shutdown();
@@ -297,6 +380,8 @@ fn computeVsParams(rx: f32, ry: f32, rz: f32) shd.VsParams {
 
 fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
     const event = event_arr[0];
+
+    _ = simgui.handleEvent(event);
 
     switch (event.type) {
         .KEY_DOWN, .KEY_UP => {
@@ -397,6 +482,31 @@ fn calcPos(pitch: f32, yaw: f32, offset: f32) Vec3 {
     };
 }
 
+fn defaultBlocks() !void {
+    try state.blocksArr.appendSlice(
+        &.{
+            try (try blocks.Cube.init_all(
+                state.allocator,
+                "bricks.png",
+            )).to_block("bricks"),
+            try (try blocks.Cube.init_all(
+                state.allocator,
+                "dirt.png",
+            )).to_block("dirt"),
+        },
+    );
+}
+
+pub fn ivec3ToVec3(input: IVec3) Vec3 {
+    return .{
+        .x = @floatFromInt(input.x),
+        .y = @floatFromInt(input.y),
+        .z = @floatFromInt(input.z),
+    };
+}
+
 test {
+    _ = @import("blocks.zig");
+
     @import("std").testing.refAllDecls(@This());
 }

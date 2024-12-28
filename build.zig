@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
+        .with_sokol_imgui = true,
     });
 
     const zigimg_dependency = b.dependency("zigimg", .{
@@ -30,6 +31,14 @@ pub fn build(b: *std.Build) void {
 
     const zlm = b.dependency("zlm", .{});
 
+    const dep_cimgui = b.dependency("cimgui", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // inject the cimgui header search path into the sokol C library compile step
+    dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
+
     const exe = b.addExecutable(.{
         .name = "sokol-test",
         .root_source_file = b.path("src/main.zig"),
@@ -37,6 +46,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("sokol", dep_sokol.module("sokol"));
+    exe.root_module.addImport("cimgui", dep_cimgui.module("cimgui"));
 
     exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
@@ -83,6 +93,8 @@ pub fn build(b: *std.Build) void {
     exe_unit_tests.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
 
     exe_unit_tests.root_module.addImport("zlm", zlm.module("zlm"));
+
+    exe_unit_tests.root_module.addImport("cimgui", dep_cimgui.module("cimgui"));
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 

@@ -27,6 +27,14 @@
             .url = "git+https://github.com/Cethannel/zlm#75f7f60c3ea212cbda2d0941c968cded692bbf0a",
             .hash = "12207c4015ee2d8352879e0950f644595e1082e6606db3ca2f88db54e74d8fb11e2f",
         },
+        .zgui = .{
+            .url = "git+https://github.com/zig-gamedev/zgui#5e268ec8f19f640a064542429270737d2f19ad31",
+            .hash = "1220e4a659899a9b99eec44ed85280fd7a9d87b38587759d3b9a918619d491fe78b4",
+        },
+        .cimgui = .{
+            .url = "git+https://github.com/floooh/dcimgui.git#6d054aaf23a2a21903023b87316877b1dd4e66a0",
+            .hash = "12200aded8c04f0f18420f41bd97392d67da33b74833e8474932ad58e2fedd2f905c",
+        },
     },
     .paths = .{
         "build.zig",

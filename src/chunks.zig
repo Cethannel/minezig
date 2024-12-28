@@ -13,6 +13,8 @@ const zlm = @import("zlm");
 const IZlm = zlm.SpecializeOn(i64);
 pub const IVec3 = IZlm.Vec3;
 
+const state = &root.state;
+
 pub const chunkWidth = 16;
 pub const chunkHeight = 256;
 
@@ -77,6 +79,27 @@ pub const Chunk = struct {
     pub fn gen_solid_chunk() @This() {
         const idThing: u32 = 1;
         const blocks = .{.{.{Block{ .id = @enumFromInt(idThing) }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
+        var tmp: @This() = .{
+            .blocks = blocks,
+            .sides = undefined,
+        };
+
+        tmp.sides = tmp.gen_sides();
+
+        return tmp;
+    }
+
+    pub fn gen_half_solid_chunk() @This() {
+        @setEvalBranchQuota(chunkWidth * chunkHeight * chunkWidth * 2);
+        const idThing: u32 = 1;
+        var blocks: [chunkWidth][chunkHeight][chunkWidth]Block = .{.{.{Block{ .id = .Air }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
+        for (0..chunkWidth) |x| {
+            for (0..chunkHeight / 2) |y| {
+                for (0..chunkWidth) |z| {
+                    blocks[x][y][z].id = @enumFromInt(idThing);
+                }
+            }
+        }
         var tmp: @This() = .{
             .blocks = blocks,
             .sides = undefined,
@@ -162,18 +185,15 @@ pub const Chunk = struct {
                             }
 
                             const indexOffset = maxOffset;
+                            const vert = try state.blocksArr.items[@intFromEnum(block.id)].gen_vertices_sides(
+                                index1,
+                                zlm.vec3(@floatFromInt(x), @floatFromInt(y), @floatFromInt(z)),
+                            );
                             for (0..6) |index2| {
                                 var i = index1 * 4 + index2;
 
                                 if (index2 < 4) {
-                                    var newVertex = baseVertices[i];
-                                    newVertex.x += @floatFromInt(x);
-                                    newVertex.y += @floatFromInt(y);
-                                    newVertex.z += @floatFromInt(z);
-
-                                    newVertex.v /= 2.0;
-
-                                    try vertices.append(newVertex);
+                                    try vertices.append(vert[index2]);
                                 }
 
                                 i = index1 * 6 + index2;
@@ -243,8 +263,16 @@ pub const ChunkMap = struct {
         };
     }
 
+    pub fn get(self: *@This(), pos: IVec3) ?RenderChunk {
+        return self.map.get(pos);
+    }
+
+    pub fn getPtr(self: *@This(), pos: IVec3) ?*RenderChunk {
+        return self.map.getPtr(pos);
+    }
+
     pub fn genChunk(self: *Self, chunkPos: IVec3) !void {
-        const chunk = Chunk.gen_solid_chunk();
+        const chunk = comptime Chunk.gen_half_solid_chunk();
 
         const rchunk = RenderChunk{
             .chunk = chunk,
@@ -270,6 +298,10 @@ pub const ChunkMap = struct {
                 }
             }
         }
+    }
+
+    pub fn contains(self: *const Self, pos: IVec3) bool {
+        return self.map.contains(pos);
     }
 
     pub fn genMesh(self: *Self, chunkPos: IVec3) !void {
@@ -360,6 +392,78 @@ pub const Mesh = struct {
         self.indices.deinit();
     }
 };
+
+fn chunkPosFromPlayerPos(playerPos: zlm.Vec3) IVec3 {
+    const div = zlm.Vec3{
+        .x = chunkWidth,
+        .y = chunkHeight,
+        .z = chunkWidth,
+    };
+
+    const out = playerPos.div(div);
+
+    return .{
+        .x = @intFromFloat(out.x),
+        .y = @intFromFloat(out.y),
+        .z = @intFromFloat(out.z),
+    };
+}
+
+fn getPlayerChunkPos() IVec3 {
+    return chunkPosFromPlayerPos(state.cameraPos);
+}
+
+fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
+    if (toGenPos.distance2(chunkPos) > dist2) {
+        return;
+    }
+
+    if (state.chunkMap.get(toGenPos)) |chunk| {
+        if (chunk.mesh == null) {
+            try state.genChunkMeshQueue.add(toGenPos);
+        }
+
+        return;
+    }
+
+    try state.genChunkQueue.add(toGenPos);
+}
+
+fn outRangeDel(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
+    if (toGenPos.distance2(chunkPos) <= dist2) {
+        return;
+    }
+
+    if (state.chunkMap.getPtr(toGenPos)) |chunk| {
+        if (chunk.mesh) |*mesh| {
+            mesh.deinit();
+            chunk.mesh = null;
+        }
+    }
+}
+
+/// Removes meshes outside chunk range
+pub fn renderDistanceGen() !void {
+    const chunkPos: IVec3 = getPlayerChunkPos();
+    const dist2: u32 = @as(u32, @intCast(state.renderDistance)) * state.renderDistance;
+
+    for (0..(state.renderDistance + 4) * 2) |dx| {
+        for (0..(state.renderDistance + 4) * 2) |dz| {
+            const toGenPos = IVec3.new(
+                @as(i64, @intCast(dx)) - state.renderDistance + chunkPos.x,
+                0,
+                @as(i64, @intCast(dz)) - state.renderDistance + chunkPos.z,
+            );
+
+            try inRangeGen(chunkPos, toGenPos, dist2);
+            try outRangeDel(chunkPos, toGenPos, dist2);
+        }
+    }
+}
+
+fn getNumberTextures() usize {
+    return state.atlas.len / 32;
+}
 
 test "Convert Int to float" {
     const f: f32 = @floatFromInt(1);
