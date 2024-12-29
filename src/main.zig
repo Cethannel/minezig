@@ -32,10 +32,14 @@ const KC854 = 0;
 const C64 = 1;
 const ORIC = 2;
 
-const window_w = 1280;
-const window_h = 720;
+const window_w = 1920;
+const window_h = 1080;
 
 const Color = struct { r: u8, g: u8, b: u8 };
+
+pub const std_options = .{
+    .log_level = .info,
+};
 
 pub const Mesh = struct {
     vertexBuffer: sg.Buffer,
@@ -88,6 +92,8 @@ const State = struct {
     renderDistance: u8 = 16,
 
     textureMap: std.StringHashMap(u32) = undefined,
+
+    seed: i32 = 1337,
 
     const GPA = std.heap.GeneralPurposeAllocator(.{
         .enable_memory_limit = true,
@@ -168,6 +174,8 @@ fn init() callconv(.C) void {
     state.textureMap = std.StringHashMap(u32).init(state.allocator);
 
     state.blocksArr = std.ArrayList(blocks.Block).init(state.allocator);
+
+    state.blocksArr.append(blocks.AirBlock) catch unreachable;
 
     defaultBlocks() catch unreachable;
 
@@ -493,6 +501,17 @@ fn defaultBlocks() !void {
                 state.allocator,
                 "dirt.png",
             )).to_block("dirt"),
+            try (try blocks.Cube.init_all(
+                state.allocator,
+                "stone.png",
+            )).to_block("stone"),
+            try (try blocks.Cube.init_sides(
+                state.allocator,
+                .{ .TopOthers = .{
+                    .top = "grass_top.png",
+                    .other = "dirt.png",
+                } },
+            )).to_block("grass"),
         },
     );
 }

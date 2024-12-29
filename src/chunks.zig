@@ -1,6 +1,10 @@
 const std = @import("std");
 const root = @import("main.zig");
 
+const fastnoise = @import("fastnoise.zig");
+
+const Blocks = @import("blocks.zig");
+
 const sokol = @import("sokol");
 const sapp = sokol.app;
 const sg = sokol.gfx;
@@ -17,6 +21,8 @@ const state = &root.state;
 
 pub const chunkWidth = 16;
 pub const chunkHeight = 256;
+const fChunkHeight: comptime_float = @floatFromInt(chunkHeight);
+const fHalfChunkHeight: comptime_float = fChunkHeight / 2.0;
 
 pub const BlockId = enum(u32) {
     Air = 0,
@@ -91,6 +97,7 @@ pub const Chunk = struct {
 
     pub fn gen_half_solid_chunk() @This() {
         @setEvalBranchQuota(chunkWidth * chunkHeight * chunkWidth * 2);
+        //var stone = Blocks.getBlockId("stone").?;
         const idThing: u32 = 1;
         var blocks: [chunkWidth][chunkHeight][chunkWidth]Block = .{.{.{Block{ .id = .Air }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
         for (0..chunkWidth) |x| {
@@ -121,6 +128,47 @@ pub const Chunk = struct {
         tmp.sides = tmp.gen_sides();
 
         return tmp;
+    }
+
+    pub fn gen_chunk(chunkPos: IVec3) @This() {
+        var out: @This() = undefined;
+
+        const noise = fastnoise.Noise(f32){
+            .seed = state.seed,
+            .noise_type = .perlin,
+        };
+
+        const stoneId = Blocks.getBlockId("stone").?;
+        const grassId = Blocks.getBlockId("grass").?;
+
+        const chunkGlobalPos = chunkToWorldPos(chunkPos);
+
+        for (0..chunkWidth) |x| {
+            for (0..chunkWidth) |z| {
+                const fx: f32 = @floatFromInt(x);
+                const fz: f32 = @floatFromInt(z);
+                const height = noise.genNoise2D(chunkGlobalPos.x + fx, chunkGlobalPos.z + fz);
+                for (0..chunkHeight) |y| {
+                    const fy: f32 = @floatFromInt(y);
+
+                    const ny: f32 = (fy - fHalfChunkHeight) / fHalfChunkHeight;
+
+                    const dy = ny - height;
+
+                    if (dy < -0.1) {
+                        out.blocks[x][y][z].id = @enumFromInt(stoneId);
+                    } else if (dy >= -0.1 and dy <= 0.1) {
+                        out.blocks[x][y][z].id = @enumFromInt(grassId);
+                    } else {
+                        out.blocks[x][y][z].id = .Air;
+                    }
+                }
+            }
+        }
+
+        out.sides = out.gen_sides();
+
+        return out;
     }
 
     pub fn gen_mesh(self: *const @This(), neighbor_sides: Sides, allocator: std.mem.Allocator) !struct {
@@ -272,7 +320,7 @@ pub const ChunkMap = struct {
     }
 
     pub fn genChunk(self: *Self, chunkPos: IVec3) !void {
-        const chunk = comptime Chunk.gen_half_solid_chunk();
+        const chunk = Chunk.gen_chunk(chunkPos);
 
         const rchunk = RenderChunk{
             .chunk = chunk,
@@ -463,6 +511,14 @@ pub fn renderDistanceGen() !void {
 
 fn getNumberTextures() usize {
     return state.atlas.len / 32;
+}
+
+fn chunkToWorldPos(chunkPos: IVec3) zlm.Vec3 {
+    return .{
+        .x = @as(f32, @floatFromInt(chunkPos.x)) * 16.0,
+        .y = @as(f32, @floatFromInt(chunkPos.y)) * 16.0,
+        .z = @as(f32, @floatFromInt(chunkPos.z)) * 16.0,
+    };
 }
 
 test "Convert Int to float" {

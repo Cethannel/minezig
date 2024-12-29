@@ -41,14 +41,32 @@ pub const Block = struct {
     }
 
     pub fn deinit(self: *@This()) void {
+        if (std.mem.eql(u8, "air", self.blockName)) {
+            return;
+        }
+
         self.inner_deinit(self.inner);
         self.allocator.free(self.blockName);
         self.free_inner(self.allocator, self.inner);
     }
 };
 
-const Sides = union(enum) {
+pub const Sides = union(enum) {
     All: []const u8,
+    TopOthers: struct {
+        top: []const u8,
+        other: []const u8,
+    },
+
+    pub fn dupe(self: @This(), allocator: std.mem.Allocator) !Sides {
+        return switch (self) {
+            .All => |all| .{ .All = try allocator.dupe(u8, all) },
+            .TopOthers => |topOthers| Sides{ .TopOthers = .{
+                .top = try allocator.dupe(u8, topOthers.top),
+                .other = try allocator.dupe(u8, topOthers.other),
+            } },
+        };
+    }
 };
 
 fn freeGenerice(t: type) type {
@@ -115,6 +133,15 @@ pub const Cube = struct {
         };
     }
 
+    pub fn init_sides(allocator: std.mem.Allocator, sides: Sides) !Self {
+        const newSides = try sides.dupe(allocator);
+
+        return Self{
+            .allocator = allocator,
+            .sides = newSides,
+        };
+    }
+
     pub fn get_textures_names(self: *const Self, allocator: std.mem.Allocator) anyerror![][]const u8 {
         switch (self.sides) {
             .All => |sides| {
@@ -122,6 +149,15 @@ pub const Cube = struct {
                 errdefer allocator.free(out);
 
                 out[0] = try allocator.dupe(u8, sides);
+
+                return out;
+            },
+            .TopOthers => |sides| {
+                const out = try allocator.alloc([]const u8, 2);
+                errdefer allocator.free(out);
+
+                out[0] = try allocator.dupe(u8, sides.top);
+                out[1] = try allocator.dupe(u8, sides.other);
 
                 return out;
             },
@@ -142,20 +178,21 @@ pub const Cube = struct {
             newVertex.y += pos.y;
             newVertex.z += pos.z;
 
-            switch (self.sides) {
-                .All => |all| {
-                    const textureIndex = state.textureMap.get(all).?;
-
-                    std.log.info("Texure index: {}", .{textureIndex});
-                    std.log.info("Num indes: {}", .{numIndices});
-
-                    newVertex.v /= @as(f32, @floatFromInt(numIndices));
-                    newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
-                        @as(f32, @floatFromInt(numIndices));
-
-                    std.log.info("Vertex v: {}", .{newVertex.v});
+            const texName = swi: switch (self.sides) {
+                .All => |all| all,
+                .TopOthers => |topOthers| {
+                    var texName = topOthers.other;
+                    if (side == 5) {
+                        texName = topOthers.top;
+                    }
+                    break :swi texName;
                 },
-            }
+            };
+            const textureIndex = state.textureMap.get(texName).?;
+
+            newVertex.v /= @as(f32, @floatFromInt(numIndices));
+            newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
+                @as(f32, @floatFromInt(numIndices));
 
             out[i] = newVertex;
         }
@@ -167,6 +204,10 @@ pub const Cube = struct {
         switch (self.sides) {
             .All => |sides| {
                 self.allocator.free(sides);
+            },
+            .TopOthers => |sides| {
+                self.allocator.free(sides.top);
+                self.allocator.free(sides.other);
             },
         }
     }
@@ -217,6 +258,56 @@ const baseVertices = [_]root.Vertex{
     .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
     .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
 };
+
+pub const Air = struct {
+    const Self = @This();
+
+    pub fn get_textures_names(self: *const Self, allocator: std.mem.Allocator) anyerror![][]const u8 {
+        _ = self;
+        _ = allocator;
+        @panic("Called get texture names for air");
+    }
+
+    pub fn gen_vertices_sides(
+        self: *const Self,
+        side: usize,
+        pos: zlm.Vec3,
+    ) ![4]root.Vertex {
+        _ = self;
+        _ = side;
+        _ = pos;
+        @panic("Called get texture names for air");
+    }
+
+    pub fn deinit(self: *Self) void {
+        _ = self;
+    }
+
+    pub fn to_block(self: *const Self, name: []const u8) !Block {
+        return toBlock(self.*, self.allocator, name);
+    }
+};
+
+const air = Air{};
+pub const AirBlock = Block{
+    .inner = @constCast(@ptrCast(&air)),
+    .allocator = undefined,
+    .blockName = "air",
+    .free_inner = undefined,
+    .inner_deinit = undefined,
+    .inner_get_textures_names = @ptrCast(&Air.get_textures_names),
+    .inner_gen_vertices_sides = @ptrCast(&Air.gen_vertices_sides),
+};
+
+pub fn getBlockId(blockName: []const u8) ?u32 {
+    for (state.blocksArr.items, 0..) |name, i| {
+        if (std.mem.eql(u8, name.blockName, blockName)) {
+            return @intCast(i);
+        }
+    }
+
+    return null;
+}
 
 test "Cube Block" {
     const allocator = std.testing.allocator;
