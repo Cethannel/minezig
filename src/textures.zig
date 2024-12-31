@@ -29,6 +29,7 @@ pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) !
     defer out.deinit();
 
     for (textures) |textFile| {
+        std.log.info("Loading image {s}", .{textFile});
         var image = try zigimg.Image.fromFilePath(allocator, textFile);
         try image.convert(.rgba32);
 
@@ -49,10 +50,11 @@ pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) !
     return out.toOwnedSlice();
 }
 
+const basePath = "assets/textures/";
+
 pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
-    var hashMap = std.StringHashMap(struct {}).init(state.allocator);
-    defer hashMap.deinit();
-    const basePath = "assets/textures/";
+    var out = std.ArrayList([]const u8).init(state.allocator);
+    defer out.deinit();
 
     for (blocksToRegister, 0..) |block, i| {
         std.log.info("Block[{}]: `{s}`", .{ i, block.blockName });
@@ -64,23 +66,25 @@ pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
 
         for (names) |name| {
             defer state.allocator.free(name);
-            if (!hashMap.contains(name)) {
+            if (!hasTextureName(out, name)) {
+                std.log.info("Adding texture: {s}", .{name});
                 const newName = try state.allocator.alloc(u8, basePath.len + name.len);
                 @memcpy(newName[0..basePath.len], basePath);
                 @memcpy(newName[basePath.len..], name);
-                try hashMap.put(newName, .{});
+                try out.append(newName);
             }
         }
     }
 
-    var out = std.ArrayList([]const u8).init(state.allocator);
-    defer out.deinit();
+    return out.toOwnedSlice();
+}
 
-    var keyIter = hashMap.keyIterator();
-
-    while (keyIter.next()) |key| {
-        try out.append(key.*);
+fn hasTextureName(arr: std.ArrayList([]const u8), name: []const u8) bool {
+    for (arr.items) |value| {
+        if (std.mem.eql(u8, value[basePath.len..], name)) {
+            return true;
+        }
     }
 
-    return out.toOwnedSlice();
+    return false;
 }

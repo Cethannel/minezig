@@ -15,14 +15,17 @@ layout(binding=0) uniform vs_params {
 in vec4 pos;
 in vec2 texcoord0;
 in vec3 normal0;
+in vec3 modifierColor0;
 
 out vec2 uv;
 out vec3 normal;
+out vec3 modifierColor;
 
 void main() {
     gl_Position = mvp * pos;
     uv = texcoord0;
     normal = normal0;
+    modifierColor = modifierColor0;
 }
 #pragma sokol @end
 
@@ -32,10 +35,16 @@ layout(binding=0) uniform sampler smp;
 
 in vec2 uv;
 in vec3 normal;
+in vec3 modifierColor;
 out vec4 frag_color;
 
 void main() {
-    frag_color = texture(sampler2D(tex, smp), uv);
+    vec4 text = texture(sampler2D(tex, smp), uv);
+    vec4 outColor = text;
+    if (text.r == text.g && text.g == text.b) {
+    	outColor *= vec4(modifierColor, 1.0);
+    }
+    frag_color = outColor;
 }
 #pragma sokol @end
 

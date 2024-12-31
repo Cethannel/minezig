@@ -120,14 +120,11 @@ const State = struct {
 pub var state: State = .{};
 
 pub const Vertex = extern struct {
-    x: f32,
-    y: f32,
-    z: f32,
+    pos: zlm.Vec3,
     u: f32,
     v: f32,
-    nx: f32,
-    ny: f32,
-    nz: f32,
+    normal: zlm.Vec3,
+    modifierColor: zlm.Vec3,
 };
 
 pub fn main() !void {
@@ -183,13 +180,16 @@ fn init() callconv(.C) void {
 
     defer state.allocator.free(blockTextures);
 
+    state.atlas = textures.createAtlas(blockTextures, state.allocator) catch unreachable;
+
     for (blockTextures, 0..) |blkName, i| {
-        const name = blkName["assets/textures/".len..];
+        const basePath = "assets/textures/";
+        const name = state.allocator.alloc(u8, blkName.len - "assets/textures/".len) catch unreachable;
+        @memcpy(name, blkName[basePath.len..]);
         std.log.info("Adding texture name: {s}", .{name});
         state.textureMap.put(name, @intCast(i)) catch unreachable;
+        state.allocator.free(blkName);
     }
-
-    state.atlas = textures.createAtlas(blockTextures, state.allocator) catch unreachable;
 
     var img_desc: sg.ImageDesc = .{
         .width = 32,
@@ -236,6 +236,7 @@ fn init() callconv(.C) void {
     pip_desc.layout.attrs[shd.ATTR_texcube_pos].format = .FLOAT3;
     pip_desc.layout.attrs[shd.ATTR_texcube_texcoord0].format = .FLOAT2;
     pip_desc.layout.attrs[shd.ATTR_texcube_normal0].format = .FLOAT3;
+    pip_desc.layout.attrs[shd.ATTR_texcube_modifierColor0].format = .FLOAT3;
     state.pip = sg.makePipeline(pip_desc);
 
     var sdtx_desc: sdtx.Desc = .{ .logger = .{ .func = slog.func } };
@@ -354,6 +355,15 @@ fn frame() callconv(.C) void {
 }
 
 fn cleanup() callconv(.C) void {
+    var tMapIter = state.textureMap.keyIterator();
+
+    while (tMapIter.next()) |key| {
+        std.log.info("Freeing: {s}", .{key.*});
+        state.allocator.free(key.*);
+    }
+
+    state.textureMap.deinit();
+
     for (state.blocksArr.items) |*blk| {
         blk.deinit();
     }
@@ -495,22 +505,31 @@ fn defaultBlocks() !void {
         &.{
             try (try blocks.Cube.init_all(
                 state.allocator,
-                "bricks.png",
+                .{ .file = "bricks.png" },
             )).to_block("bricks"),
             try (try blocks.Cube.init_all(
                 state.allocator,
-                "dirt.png",
+                .{ .file = "dirt.png" },
             )).to_block("dirt"),
             try (try blocks.Cube.init_all(
                 state.allocator,
-                "stone.png",
+                .{ .file = "stone.png" },
             )).to_block("stone"),
             try (try blocks.Cube.init_sides(
                 state.allocator,
-                .{ .TopOthers = .{
-                    .top = "grass_top.png",
-                    .other = "dirt.png",
-                } },
+                .{
+                    .TopBotOthers = .{
+                        .top = .{
+                            .file = "grass_top.png",
+                            .colorOveride = .{
+                                .x = 124.0 / 256.0,
+                                .y = 189.0 / 256.0,
+                                .z = 107.0 / 256.0,
+                            },
+                        },
+                        .bot = .{ .file = "dirt.png" },
+                    },
+                },
             )).to_block("grass"),
         },
     );

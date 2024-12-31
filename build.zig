@@ -6,7 +6,7 @@ const textures = @import("src/textures.zig");
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -17,6 +17,11 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    const chunkgen = b.option(bool, "chunkGenLog", "Log generating chunks") orelse false;
+
+    const options = b.addOptions();
+    options.addOption(bool, "chunkGenLog", chunkgen);
 
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
@@ -45,12 +50,34 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("sokol", dep_sokol.module("sokol"));
-    exe.root_module.addImport("cimgui", dep_cimgui.module("cimgui"));
 
-    exe.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
+    const imports = [_]struct {
+        name: []const u8,
+        dep: *Build.Dependency,
+    }{
+        .{
+            .name = "sokol",
+            .dep = dep_sokol,
+        },
+        .{
+            .name = "zigimg",
+            .dep = zigimg_dependency,
+        },
+        .{
+            .name = "cimgui",
+            .dep = dep_cimgui,
+        },
+        .{
+            .name = "zlm",
+            .dep = zlm,
+        },
+    };
 
-    exe.root_module.addImport("zlm", zlm.module("zlm"));
+    for (imports) |import| {
+        exe.root_module.addImport(import.name, import.dep.module(import.name));
+    }
+
+    exe.root_module.addOptions("config", options);
 
     // This declares intent for the executable to be installed into the
     // standard location when the user invokes the "install" step (the default

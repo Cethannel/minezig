@@ -1,6 +1,8 @@
 const std = @import("std");
 const root = @import("main.zig");
 
+const config = @import("config");
+
 const fastnoise = @import("fastnoise.zig");
 
 const Blocks = @import("blocks.zig");
@@ -353,7 +355,9 @@ pub const ChunkMap = struct {
     }
 
     pub fn genMesh(self: *Self, chunkPos: IVec3) !void {
-        std.log.info("Generating chunk at: {}", .{chunkPos});
+        if (config.chunkGenLog) {
+            std.log.info("Generating chunk at: {}", .{chunkPos});
+        }
         if (self.map.getPtr(chunkPos)) |rChunk| {
             if (rChunk.mesh) |*mesh| {
                 mesh.deinit();

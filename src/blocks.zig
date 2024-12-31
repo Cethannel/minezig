@@ -51,19 +51,47 @@ pub const Block = struct {
     }
 };
 
+pub const SideInfo = struct {
+    file: []const u8,
+    colorOveride: zlm.Vec3 = zlm.Vec3.all(1.0),
+
+    pub fn dupe(self: @This(), allocator: std.mem.Allocator) !@This() {
+        return .{
+            .file = try allocator.dupe(u8, self.file),
+            .colorOveride = self.colorOveride,
+        };
+    }
+
+    pub fn deinit(self: @This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.file);
+    }
+};
+
 pub const Sides = union(enum) {
-    All: []const u8,
+    All: SideInfo,
     TopOthers: struct {
-        top: []const u8,
-        other: []const u8,
+        top: SideInfo,
+        other: SideInfo,
+    },
+    TopBotOthers: struct {
+        top: SideInfo,
+        other: SideInfo,
+        bot: SideInfo,
     },
 
     pub fn dupe(self: @This(), allocator: std.mem.Allocator) !Sides {
         return switch (self) {
-            .All => |all| .{ .All = try allocator.dupe(u8, all) },
+            .All => |all| .{
+                .All = try all.dupe(allocator),
+            },
             .TopOthers => |topOthers| Sides{ .TopOthers = .{
-                .top = try allocator.dupe(u8, topOthers.top),
-                .other = try allocator.dupe(u8, topOthers.other),
+                .top = try topOthers.top.dupe(allocator),
+                .other = try topOthers.other.dupe(allocator),
+            } },
+            .TopBotOthers => |topOthers| Sides{ .TopBotOthers = .{
+                .top = try topOthers.top.dupe(allocator),
+                .other = try topOthers.other.dupe(allocator),
+                .bot = try topOthers.bot.dupe(allocator),
             } },
         };
     }
@@ -122,13 +150,13 @@ pub const Cube = struct {
 
     const Self = @This();
 
-    pub fn init_all(allocator: std.mem.Allocator, all: []const u8) !Self {
-        const sidesName = try allocator.dupe(u8, all);
+    pub fn init_all(allocator: std.mem.Allocator, all: SideInfo) !Self {
+        const sides = try all.dupe(allocator);
 
         return Self{
             .allocator = allocator,
             .sides = .{
-                .All = sidesName,
+                .All = sides,
             },
         };
     }
@@ -148,7 +176,7 @@ pub const Cube = struct {
                 const out = try allocator.alloc([]const u8, 1);
                 errdefer allocator.free(out);
 
-                out[0] = try allocator.dupe(u8, sides);
+                out[0] = try allocator.dupe(u8, sides.file);
 
                 return out;
             },
@@ -156,8 +184,18 @@ pub const Cube = struct {
                 const out = try allocator.alloc([]const u8, 2);
                 errdefer allocator.free(out);
 
-                out[0] = try allocator.dupe(u8, sides.top);
-                out[1] = try allocator.dupe(u8, sides.other);
+                out[0] = try allocator.dupe(u8, sides.top.file);
+                out[1] = try allocator.dupe(u8, sides.other.file);
+
+                return out;
+            },
+            .TopBotOthers => |sides| {
+                const out = try allocator.alloc([]const u8, 3);
+                errdefer allocator.free(out);
+
+                out[0] = try allocator.dupe(u8, sides.top.file);
+                out[1] = try allocator.dupe(u8, sides.other.file);
+                out[2] = try allocator.dupe(u8, sides.bot.file);
 
                 return out;
             },
@@ -174,11 +212,11 @@ pub const Cube = struct {
 
         for (0..4) |i| {
             var newVertex = baseVertices[side * 4 + i];
-            newVertex.x += pos.x;
-            newVertex.y += pos.y;
-            newVertex.z += pos.z;
+            newVertex.pos.x += pos.x;
+            newVertex.pos.y += pos.y;
+            newVertex.pos.z += pos.z;
 
-            const texName = swi: switch (self.sides) {
+            const texInfo = swi: switch (self.sides) {
                 .All => |all| all,
                 .TopOthers => |topOthers| {
                     var texName = topOthers.other;
@@ -187,8 +225,20 @@ pub const Cube = struct {
                     }
                     break :swi texName;
                 },
+                .TopBotOthers => |topOthers| {
+                    var texName = topOthers.other;
+                    if (side == 5) {
+                        texName = topOthers.top;
+                    }
+                    if (side == 4) {
+                        texName = topOthers.bot;
+                    }
+                    break :swi texName;
+                },
             };
-            const textureIndex = state.textureMap.get(texName).?;
+            const textureIndex = state.textureMap.get(texInfo.file).?;
+
+            newVertex.modifierColor = texInfo.colorOveride;
 
             newVertex.v /= @as(f32, @floatFromInt(numIndices));
             newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
@@ -203,11 +253,16 @@ pub const Cube = struct {
     pub fn deinit(self: *Self) void {
         switch (self.sides) {
             .All => |sides| {
-                self.allocator.free(sides);
+                sides.deinit(self.allocator);
             },
             .TopOthers => |sides| {
-                self.allocator.free(sides.top);
-                self.allocator.free(sides.other);
+                sides.top.deinit(self.allocator);
+                sides.other.deinit(self.allocator);
+            },
+            .TopBotOthers => |sides| {
+                sides.top.deinit(self.allocator);
+                sides.other.deinit(self.allocator);
+                sides.bot.deinit(self.allocator);
             },
         }
     }
@@ -228,35 +283,179 @@ fn getNumberTextures() usize {
 //       ),
 
 const baseVertices = [_]root.Vertex{
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = 0.0, .nz = -1.0 },
+    .{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
+        .u = 0,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = -1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 0.0, .z = 0.0 },
+        .u = 1,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = -1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 1.0, .z = 0.0 },
+        .u = 1,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = -1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 0.0, .y = 1.0, .z = 0.0 },
+        .u = 0,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = -1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
 
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0, .nx = 0.0, .ny = 0.0, .nz = 1.0 },
+    .{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 1.0 },
+        .u = 0,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = 1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 0.0, .z = 1.0 },
+        .u = 1,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = 1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+        .u = 1,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = 1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 0.0, .y = 1.0, .z = 1.0 },
+        .u = 0,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = 0.0, .z = 1.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
 
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 1, .v = 1, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 1, .v = 0, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 0, .v = 0, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 0, .v = 1, .nx = -1.0, .ny = 0.0, .nz = 0.0 },
+    .{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
+        .u = 1,
+        .v = 1,
+        .normal = .{ .x = -1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 0.0, .y = 1.0, .z = 0.0 },
+        .u = 1,
+        .v = 0,
+        .normal = .{ .x = -1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 0.0, .y = 1.0, .z = 1.0 },
+        .u = 0,
+        .v = 0,
+        .normal = .{ .x = -1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 1.0 },
+        .u = 0,
+        .v = 1,
+        .normal = .{ .x = -1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
 
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1, .nx = 1.0, .ny = 0.0, .nz = 0.0 },
+    .{
+        .pos = .{ .x = 1.0, .y = 0.0, .z = 0.0 },
+        .u = 0,
+        .v = 1,
+        .normal = .{ .x = 1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 1.0, .z = 0.0 },
+        .u = 0,
+        .v = 0,
+        .normal = .{ .x = 1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+        .u = 1,
+        .v = 0,
+        .normal = .{ .x = 1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 0.0, .z = 1.0 },
+        .u = 1,
+        .v = 1,
+        .normal = .{ .x = 1.0, .y = 0.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
 
-    .{ .x = 0.0, .y = 0.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 0.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 0.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = -1.0, .nz = 0.0 },
+    .{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 0.0 },
+        .u = 0,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = -1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 0.0, .y = 0.0, .z = 1.0 },
+        .u = 1,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = -1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 0.0, .z = 1.0 },
+        .u = 1,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = -1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 0.0, .z = 0.0 },
+        .u = 0,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = -1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
 
-    .{ .x = 0.0, .y = 1.0, .z = 0.0, .u = 0, .v = 0, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
-    .{ .x = 0.0, .y = 1.0, .z = 1.0, .u = 1, .v = 0, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 1.0, .u = 1, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
-    .{ .x = 1.0, .y = 1.0, .z = 0.0, .u = 0, .v = 1, .nx = 0.0, .ny = 1.0, .nz = 0.0 },
+    .{
+        .pos = .{ .x = 0.0, .y = 1.0, .z = 0.0 },
+        .u = 0,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = 1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 0.0, .y = 1.0, .z = 1.0 },
+        .u = 1,
+        .v = 0,
+        .normal = .{ .x = 0.0, .y = 1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+        .u = 1,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = 1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
+    .{
+        .pos = .{ .x = 1.0, .y = 1.0, .z = 0.0 },
+        .u = 0,
+        .v = 1,
+        .normal = .{ .x = 0.0, .y = 1.0, .z = 0.0 },
+        .modifierColor = .{ .x = 1.0, .y = 1.0, .z = 1.0 },
+    },
 };
 
 pub const Air = struct {
