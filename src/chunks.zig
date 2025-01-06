@@ -517,12 +517,62 @@ fn getNumberTextures() usize {
     return state.atlas.len / 32;
 }
 
-fn chunkToWorldPos(chunkPos: IVec3) zlm.Vec3 {
+pub fn chunkToWorldPos(chunkPos: IVec3) zlm.Vec3 {
     return .{
         .x = @as(f32, @floatFromInt(chunkPos.x)) * 16.0,
         .y = @as(f32, @floatFromInt(chunkPos.y)) * 16.0,
         .z = @as(f32, @floatFromInt(chunkPos.z)) * 16.0,
     };
+}
+
+pub fn worldToChunkPos(worldPos: zlm.Vec3) struct {
+    chunkPos: IVec3,
+    inChunkPos: IVec3,
+} {
+    const iWorldPos: IVec3 = .{
+        .x = @intFromFloat(worldPos.x),
+        .y = @intFromFloat(worldPos.y),
+        .z = @intFromFloat(worldPos.z),
+    };
+
+    const chunkPos = acount_for_negatives(iWorldPos);
+    const inChunkPos = convert_to_inchunk_coords(iWorldPos);
+
+    return .{
+        .chunkPos = chunkPos,
+        .inChunkPos = inChunkPos,
+    };
+}
+
+/// Converts worldspace coordinates to coordinates within a chunk
+fn convert_to_inchunk_coords(global_coords: IVec3) IVec3 {
+    return IVec3.new(
+        convert_single_coord(global_coords.x),
+        @mod(global_coords.y, chunkHeight),
+        convert_single_coord(global_coords.z),
+    );
+}
+
+// FIXME: Remove if check
+fn convert_single_coord(input: i64) i64 {
+    if (@mod(input, chunkHeight) == 0) {
+        return 0;
+    } else {
+        return (if (input < 0) @as(i64, 16) else @as(i64, 0)) + @mod(input, chunkWidth);
+    }
+}
+
+fn convert_single(input: i64, size: i64) i64 {
+    return @divTrunc((if (input < 0) input + 1 else input), size) - @as(i64, if (input < 0) 1 else 0);
+}
+
+/// Converts worldspace coordinates to coordinates of a chunk
+fn acount_for_negatives(input: IVec3) IVec3 {
+    return IVec3.new(
+        convert_single(input.x, chunkWidth),
+        convert_single(input.y, chunkHeight),
+        convert_single(input.z, chunkWidth),
+    );
 }
 
 test "Convert Int to float" {

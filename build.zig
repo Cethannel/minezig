@@ -51,6 +51,34 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    exe.addIncludePath(b.path("externalDeps/libstem_gamepad"));
+
+    exe.addCSourceFiles(.{
+        .files = &.{
+            "Gamepad_private.c",
+        },
+        .root = b.path("externalDeps/libstem_gamepad"),
+    });
+
+    const osFile: []const []const u8 = switch (target.result.os.tag) {
+        .linux => &.{
+            "Gamepad_linux.c",
+        },
+        .windows => &.{
+            "Gamepad_windows_dinput.c",
+            "Gamepad_windows_mm.c",
+        },
+        .macos => &.{
+            "Gamepad_macosx.c",
+        },
+        else => @panic("Unkown os"),
+    };
+
+    exe.addCSourceFiles(.{
+        .files = osFile,
+        .root = b.path("externalDeps/libstem_gamepad"),
+    });
+
     const imports = [_]struct {
         name: []const u8,
         dep: *Build.Dependency,
@@ -115,13 +143,11 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    exe_unit_tests.root_module.addImport("sokol", dep_sokol.module("sokol"));
+    for (imports) |import| {
+        exe_unit_tests.root_module.addImport(import.name, import.dep.module(import.name));
+    }
 
-    exe_unit_tests.root_module.addImport("zigimg", zigimg_dependency.module("zigimg"));
-
-    exe_unit_tests.root_module.addImport("zlm", zlm.module("zlm"));
-
-    exe_unit_tests.root_module.addImport("cimgui", dep_cimgui.module("cimgui"));
+    exe_unit_tests.root_module.addOptions("config", options);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
@@ -143,6 +169,7 @@ fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
     const shaders = .{
         "triangle.glsl",
         "cube.glsl",
+        "selector.glsl",
     };
 
     const shdc = "sokol-shdc";

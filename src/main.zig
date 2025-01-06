@@ -8,6 +8,8 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
 
+const c = @cImport(@cInclude("Gamepad.h"));
+
 const Thread = std.Thread;
 
 const IZlm = zlm.SpecializeOn(i64);
@@ -25,6 +27,7 @@ const mat4 = zlm.Mat4;
 
 //const shd = @import("shaders/triangle.glsl.zig");
 const shd = @import("shaders/cube.glsl.zig");
+const selectorShd = @import("shaders/selector.glsl.zig");
 
 const blocks = @import("blocks.zig");
 
@@ -34,6 +37,8 @@ const ORIC = 2;
 
 const window_w = 1920;
 const window_h = 1080;
+
+const selector = @import("selector.zig");
 
 const Color = struct { r: u8, g: u8, b: u8 };
 
@@ -60,6 +65,8 @@ const State = struct {
     lockedMouse: bool = false,
     mouseX: f32 = 0.0,
     mouseY: f32 = 0.0,
+    controllerMouseX: f32 = 0.0,
+    controllerMouseY: f32 = 0.0,
     text_pass_action: sg.PassAction = .{},
     atlas: []u32 = undefined,
 
@@ -94,6 +101,8 @@ const State = struct {
     textureMap: std.StringHashMap(u32) = undefined,
 
     seed: i32 = 1337,
+
+    selector: selector.Selector = undefined,
 
     const GPA = std.heap.GeneralPurposeAllocator(.{
         .enable_memory_limit = true,
@@ -158,6 +167,12 @@ pub fn main() !void {
 }
 
 fn init() callconv(.C) void {
+    c.Gamepad_init();
+
+    c.Gamepad_buttonDownFunc(gamepad_buttonDownFunc, null);
+    c.Gamepad_buttonUpFunc(gamepad_buttonUpFunc, null);
+    c.Gamepad_axisMoveFunc(gamepad_axisMovedFunc, null);
+
     sg.setup(.{
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
@@ -167,6 +182,8 @@ fn init() callconv(.C) void {
     simgui.setup(.{
         .logger = .{ .func = slog.func },
     });
+
+    state.selector = selector.Selector.init(state.allocator) catch unreachable;
 
     state.textureMap = std.StringHashMap(u32).init(state.allocator);
 
@@ -251,6 +268,7 @@ fn init() callconv(.C) void {
 }
 
 fn frame() callconv(.C) void {
+    c.Gamepad_processEvents();
     simgui.newFrame(.{
         .width = sapp.width(),
         .height = sapp.height(),
@@ -259,6 +277,9 @@ fn frame() callconv(.C) void {
     });
 
     const dt: f32 = @floatCast(sapp.frameDuration() * 60);
+
+    state.pitch += state.controllerMouseY * dt;
+    state.yaw += state.controllerMouseX * dt;
 
     if (state.pitch > 89.0) {
         state.pitch = 89.0;
@@ -283,6 +304,8 @@ fn frame() callconv(.C) void {
 
     state.cameraPos = state.cameraPos.add(Vec3.new(0.0, state.dy * dt, 0.0));
 
+    state.selector.calcPos();
+
     sdtx.print("First\n", .{});
 
     sdtx.print("Dt is: {d:.2}\n", .{1.0 / sapp.frameDuration()});
@@ -306,7 +329,14 @@ fn frame() callconv(.C) void {
     ig.igSetNextWindowPos(.{ .x = 400, .y = 10 }, ig.ImGuiCond_Once);
     ig.igSetNextWindowSize(.{ .x = 400, .y = 100 }, ig.ImGuiCond_Once);
     _ = ig.igBegin("Hello Dear ImGui!", 0, ig.ImGuiWindowFlags_None);
-    _ = ig.igColorEdit3("Background", &state.pass_action.colors[0].clear_value.r, ig.ImGuiColorEditFlags_None);
+    ig.igText("Position:");
+    const dirs = [_][]const u8{ "x", "y", "z" };
+    inline for (dirs) |name| {
+        var thing: c_int = @intCast(@field(state.selector.pos, name));
+        _ = ig.igDragInt(name ++ ": ", &thing);
+        @field(state.selector.pos, name) = thing;
+    }
+
     ig.igEnd();
 
     var chunkIter = state.chunkMap.map.iterator();
@@ -319,15 +349,34 @@ fn frame() callconv(.C) void {
             state.bind.index_buffer = mesh.indexBuffer;
 
             sg.applyBindings(state.bind);
-            const vs_params = computeVsParams(
-                @floatFromInt(pos.x * 16),
-                @floatFromInt(pos.y * 16),
-                @floatFromInt(pos.z * 16),
-            );
+            const vs_params = shd.VsParams{
+                .mvp = computeVsParams(
+                    @floatFromInt(pos.x * 16),
+                    @floatFromInt(pos.y * 16),
+                    @floatFromInt(pos.z * 16),
+                ),
+            };
             sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
             sg.draw(0, @intCast(mesh.indices.items.len), 1);
         }
     }
+    sg.endPass();
+    sg.beginPass(.{ .action = state.selector.pass_action, .swapchain = sglue.swapchain() });
+
+    state.selector.bind.vertex_buffers[0] = state.selector.vertexBuffer;
+    state.selector.bind.index_buffer = state.selector.indexBuffer;
+
+    const vs_params = selector.shd.VsParams{ .mvp = computeVsParams(
+        @floatFromInt(state.selector.pos.x),
+        @floatFromInt(state.selector.pos.y),
+        @floatFromInt(state.selector.pos.z),
+    ) };
+
+    sg.applyPipeline(state.selector.pip);
+    sg.applyBindings(state.selector.bind);
+
+    sg.applyUniforms(selector.shd.UB_vs_params, sg.asRange(&vs_params));
+    sg.draw(0, @intCast(state.selector.indices.items.len), 1);
     sg.endPass();
 
     sdtx.print("Second\n", .{});
@@ -370,14 +419,18 @@ fn cleanup() callconv(.C) void {
 
     state.blocksArr.deinit();
 
+    state.selector.deinit();
+
     state.genChunkQueue.deinit();
     state.genChunkMeshQueue.deinit();
     state.chunkMap.deinit();
     state.allocator.free(state.atlas);
     sg.shutdown();
+
+    c.Gamepad_shutdown();
 }
 
-fn computeVsParams(rx: f32, ry: f32, rz: f32) shd.VsParams {
+fn computeVsParams(rx: f32, ry: f32, rz: f32) math.Mat4 {
     const color = state.colors[KC854];
     sdtx.font(KC854);
     sdtx.color3b(color.r, color.g, color.b);
@@ -393,7 +446,7 @@ fn computeVsParams(rx: f32, ry: f32, rz: f32) shd.VsParams {
     const proj = mat4.createPerspective(zlm.toRadians(60.0), aspect, 0.01, 1000.0);
     const mvp = model.mul(view).mul(proj);
     //return shd.VsParams{ .mvp = mat4.mul(mat4.mul(proj, newView), model) };
-    return shd.VsParams{ .mvp = math.Mat4.fromZlm(mvp) };
+    return math.Mat4.fromZlm(mvp);
 }
 
 fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
@@ -451,6 +504,80 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
                 state.yaw += event.mouse_dx * state.sensitivity;
                 state.pitch += event.mouse_dy * state.sensitivity;
             }
+        },
+        else => {},
+    }
+}
+
+fn gamepad_buttonDownFunc(
+    dev: [*c]c.Gamepad_device,
+    buttonId: c_uint,
+    timestamp: f64,
+    context: ?*anyopaque,
+) callconv(.C) void {
+    _ = &dev;
+    _ = &context;
+    _ = &timestamp;
+
+    switch (buttonId) {
+        0 => {
+            state.dy += 1.0;
+        },
+        1 => {
+            state.dy -= 1.0;
+        },
+        else => {},
+    }
+}
+
+fn gamepad_buttonUpFunc(
+    dev: [*c]c.Gamepad_device,
+    buttonId: c_uint,
+    timestamp: f64,
+    context: ?*anyopaque,
+) callconv(.C) void {
+    _ = &dev;
+    _ = &context;
+    _ = &timestamp;
+
+    switch (buttonId) {
+        0 => {
+            state.dy -= 1.0;
+        },
+        1 => {
+            state.dy += 1.0;
+        },
+        else => {},
+    }
+}
+
+fn gamepad_axisMovedFunc(
+    dev: [*c]c.Gamepad_device,
+    axisId: c_uint,
+    value: f32,
+    lastValue: f32,
+    timestamp: f64,
+    context: ?*anyopaque,
+) callconv(.C) void {
+    _ = &dev;
+    _ = &context;
+    _ = &timestamp;
+    _ = &lastValue;
+
+    switch (axisId) {
+        0 => {
+            state.dx = -value;
+        },
+        1 => {
+            state.dz = -value;
+        },
+        3 => {
+            state.mouseX += value;
+            state.controllerMouseX = value;
+        },
+        4 => {
+            state.mouseY += value;
+            state.controllerMouseY = value;
         },
         else => {},
     }
@@ -527,10 +654,18 @@ fn defaultBlocks() !void {
                                 .z = 107.0 / 256.0,
                             },
                         },
+                        .other = .{ .file = "grass_side.png" },
                         .bot = .{ .file = "dirt.png" },
                     },
                 },
             )).to_block("grass"),
+            try (try blocks.Slab.init_sides(state.allocator, .{
+                .TopBotOthers = .{
+                    .top = .{ .file = "stone_slab_top.png" },
+                    .other = .{ .file = "stone_slab_side.png" },
+                    .bot = .{ .file = "stone_slab_top.png" },
+                },
+            })).to_block("stone_slab"),
         },
     );
 }

@@ -272,6 +272,135 @@ pub const Cube = struct {
     }
 };
 
+pub const Slab = struct {
+    allocator: std.mem.Allocator,
+    sides: Sides,
+
+    const Self = @This();
+
+    pub fn init_all(allocator: std.mem.Allocator, all: SideInfo) !Self {
+        const sides = try all.dupe(allocator);
+
+        return Self{
+            .allocator = allocator,
+            .sides = .{
+                .All = sides,
+            },
+        };
+    }
+
+    pub fn init_sides(allocator: std.mem.Allocator, sides: Sides) !Self {
+        const newSides = try sides.dupe(allocator);
+
+        return Self{
+            .allocator = allocator,
+            .sides = newSides,
+        };
+    }
+
+    pub fn get_textures_names(self: *const Self, allocator: std.mem.Allocator) anyerror![][]const u8 {
+        switch (self.sides) {
+            .All => |sides| {
+                const out = try allocator.alloc([]const u8, 1);
+                errdefer allocator.free(out);
+
+                out[0] = try allocator.dupe(u8, sides.file);
+
+                return out;
+            },
+            .TopOthers => |sides| {
+                const out = try allocator.alloc([]const u8, 2);
+                errdefer allocator.free(out);
+
+                out[0] = try allocator.dupe(u8, sides.top.file);
+                out[1] = try allocator.dupe(u8, sides.other.file);
+
+                return out;
+            },
+            .TopBotOthers => |sides| {
+                const out = try allocator.alloc([]const u8, 3);
+                errdefer allocator.free(out);
+
+                out[0] = try allocator.dupe(u8, sides.top.file);
+                out[1] = try allocator.dupe(u8, sides.other.file);
+                out[2] = try allocator.dupe(u8, sides.bot.file);
+
+                return out;
+            },
+        }
+    }
+
+    pub fn gen_vertices_sides(
+        self: *const Self,
+        side: usize,
+        pos: zlm.Vec3,
+    ) ![4]root.Vertex {
+        var out: [4]root.Vertex = undefined;
+        const numIndices = getNumberTextures();
+
+        for (0..4) |i| {
+            var newVertex = baseVertices[side * 4 + i];
+            newVertex.pos.y /= 2;
+            newVertex.pos.x += pos.x;
+            newVertex.pos.y += pos.y;
+            newVertex.pos.z += pos.z;
+
+            const texInfo = swi: switch (self.sides) {
+                .All => |all| all,
+                .TopOthers => |topOthers| {
+                    var texName = topOthers.other;
+                    if (side == 5) {
+                        texName = topOthers.top;
+                    }
+                    break :swi texName;
+                },
+                .TopBotOthers => |topOthers| {
+                    var texName = topOthers.other;
+                    if (side == 5) {
+                        texName = topOthers.top;
+                    }
+                    if (side == 4) {
+                        texName = topOthers.bot;
+                    }
+                    break :swi texName;
+                },
+            };
+            const textureIndex = state.textureMap.get(texInfo.file).?;
+
+            newVertex.modifierColor = texInfo.colorOveride;
+
+            newVertex.v /= @as(f32, @floatFromInt(numIndices)) * 2;
+            newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
+                @as(f32, @floatFromInt(numIndices));
+
+            out[i] = newVertex;
+        }
+
+        return out;
+    }
+
+    pub fn deinit(self: *Self) void {
+        switch (self.sides) {
+            .All => |sides| {
+                sides.deinit(self.allocator);
+            },
+            .TopOthers => |sides| {
+                sides.top.deinit(self.allocator);
+                sides.other.deinit(self.allocator);
+            },
+            .TopBotOthers => |sides| {
+                sides.top.deinit(self.allocator);
+                sides.other.deinit(self.allocator);
+                sides.bot.deinit(self.allocator);
+            },
+        }
+    }
+
+    pub fn to_block(self: *const Self, name: []const u8) !Block {
+        return toBlock(self.*, self.allocator, name);
+    }
+};
+
 fn getNumberTextures() usize {
     return state.atlas.len / 32 / 32;
 }
@@ -511,7 +640,7 @@ pub fn getBlockId(blockName: []const u8) ?u32 {
 test "Cube Block" {
     const allocator = std.testing.allocator;
 
-    const cube = try Cube.init_all(allocator, "thing");
+    const cube = try Cube.init_all(allocator, .{ .file = "thing" });
 
     const out = try cube.get_textures_names(allocator);
     defer allocator.free(out);
