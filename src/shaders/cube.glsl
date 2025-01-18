@@ -8,7 +8,7 @@
 #pragma sokol @ctype mat4 m.Mat4
 
 #pragma sokol @vs vs
-layout(binding=0) uniform vs_params {
+layout(binding = 0) uniform vs_params {
     mat4 mvp;
 };
 
@@ -30,8 +30,8 @@ void main() {
 #pragma sokol @end
 
 #pragma sokol @fs fs
-layout(binding=0) uniform texture2D tex;
-layout(binding=0) uniform sampler smp;
+layout(binding = 0) uniform texture2D tex;
+layout(binding = 0) uniform sampler smp;
 
 in vec2 uv;
 in vec3 normal;
@@ -42,8 +42,10 @@ void main() {
     vec4 text = texture(sampler2D(tex, smp), uv);
     vec4 outColor = text;
     if (text.r == text.g && text.g == text.b) {
-    	outColor *= vec4(modifierColor, 1.0);
-	outColor *= vec4(normal, 1.0);
+        outColor *= vec4(modifierColor, 1.0);
+    }
+    if (text.r == text.g && text.r != text.g) {
+        outColor *= vec4(normal, 1.0);
     }
     frag_color = outColor;
 }

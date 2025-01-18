@@ -255,6 +255,21 @@ fn init() callconv(.C) void {
             .write_enabled = true,
         },
         .cull_mode = .BACK,
+        .colors = colors: {
+            var out: [4]sg.ColorTargetState = [_]sg.ColorTargetState{.{}} ** 4;
+
+            out[0] = sg.ColorTargetState{
+                .blend = .{
+                    .enabled = true,
+                    .src_factor_rgb = .SRC_ALPHA,
+                    .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+                    .src_factor_alpha = .ONE,
+                    .dst_factor_alpha = .ZERO,
+                },
+            };
+
+            break :colors out;
+        },
     };
     pip_desc.layout.attrs[shd.ATTR_texcube_pos].format = .FLOAT3;
     pip_desc.layout.attrs[shd.ATTR_texcube_texcoord0].format = .FLOAT2;
@@ -347,14 +362,14 @@ fn frame() callconv(.C) void {
 
     ig.igEnd();
 
-    var chunkIter = state.chunkMap.map.iterator();
+    inline for (chunks.mesh_variants) |variant| {
+        var chunkIter = state.chunkMap.map.iterator();
 
-    while (chunkIter.next()) |entry| {
-        const pos = entry.key_ptr;
-        const chunk = entry.value_ptr;
-        //chunk.render(pos);
+        while (chunkIter.next()) |entry| {
+            const pos = entry.key_ptr;
+            const chunk = entry.value_ptr;
+            //chunk.render(pos);
 
-        inline for (chunks.mesh_variants) |variant| {
             const cMesh: ?chunks.Mesh = @field(chunk, variant ++ "_mesh");
             if (cMesh) |mesh| {
                 state.bind.vertex_buffers[0] = mesh.vertexBuffer;
@@ -684,7 +699,7 @@ fn defaultBlocks() !void {
             .{
                 .file = "glass.png",
             },
-        )).to_block("glass") },
+        )).to_block_transparent("glass") },
     );
 }
 
