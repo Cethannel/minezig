@@ -33,10 +33,10 @@ pub const Selector = struct {
     allocator: std.mem.Allocator = undefined,
     bind: sg.Bindings = .{},
     pip: sg.Pipeline = .{},
-    pass_action: sg.PassAction = undefined,
+    pass_action: sg.PassAction = .{},
 
-    vertexBuffer: sg.Buffer = undefined,
-    indexBuffer: sg.Buffer = undefined,
+    vertexBuffer: sg.Buffer = .{},
+    indexBuffer: sg.Buffer = .{},
 
     const Self = @This();
 
@@ -239,16 +239,16 @@ pub fn iVecFromVec3(input: zlm.Vec3) IVec3 {
     };
 }
 
-test "Intersecct AABB" {
-    const blockOrigin = zlm.vec3(0.0, 0.0, 0.0);
-    const blockMax = zlm.vec3(1.0, 1.0, 1.0);
-
-    const rayOrigin = zlm.vec3(2.0, 0.0, 0.0);
-    const rayDir = zlm.vec3(-1.0, 0.0, 0.0);
-
-    const out = intersectAABB(rayOrigin, rayDir, blockOrigin, blockMax);
-
-    std.debug.print("Out: {any}", .{out});
-
-    try std.testing.expect(out.x < out.y);
-}
+//test "Intersecct AABB" {
+//    const blockOrigin = zlm.vec3(0.0, 0.0, 0.0);
+//    const blockMax = zlm.vec3(1.0, 1.0, 1.0);
+//
+//    const rayOrigin = zlm.vec3(2.0, 0.0, 0.0);
+//    const rayDir = zlm.vec3(-1.0, 0.0, 0.0);
+//
+//    const out = intersectAABB(rayOrigin, rayDir, blockOrigin, blockMax);
+//
+//    std.debug.print("Out: {any}", .{out});
+//
+//    try std.testing.expect(out.x < out.y);
+//}

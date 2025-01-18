@@ -32,11 +32,11 @@ pub const Block = struct {
     inner_gen_vertices_sides: genVerticesSidesFn,
     inner_deinit: deinitFn,
 
-    pub fn get_textures_names(self: *const @This(), allocator: std.mem.Allocator) ![][]const u8 {
+    pub inline fn get_textures_names(self: *const @This(), allocator: std.mem.Allocator) ![][]const u8 {
         return self.inner_get_textures_names(self.inner, allocator);
     }
 
-    pub fn gen_vertices_sides(self: *const @This(), side: usize, pos: zlm.Vec3) ![4]root.Vertex {
+    pub inline fn gen_vertices_sides(self: *const @This(), side: usize, pos: zlm.Vec3) ![4]root.Vertex {
         return self.inner_gen_vertices_sides(self.inner, side, pos);
     }
 

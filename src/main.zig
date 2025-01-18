@@ -8,7 +8,11 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
 
-const c = @cImport(@cInclude("Gamepad.h"));
+const config = @import("config");
+
+const c = if (config.controllerSupport) @cImport(
+    @cInclude("Gamepad.h"),
+) else struct {};
 
 const Thread = std.Thread;
 
@@ -138,7 +142,7 @@ pub const Vertex = extern struct {
 
 pub fn main() !void {
     var gpa = State.GPA{
-        .requested_memory_limit = 8 * 1024 * 1024 * 1024,
+        //.requested_memory_limit = 4 * 1024 * 1024 * 1024,
     };
     state.allocator = gpa.allocator();
     state.gpa = gpa;
@@ -167,11 +171,13 @@ pub fn main() !void {
 }
 
 fn init() callconv(.C) void {
-    c.Gamepad_init();
+    if (config.controllerSupport) {
+        c.Gamepad_init();
 
-    c.Gamepad_buttonDownFunc(gamepad_buttonDownFunc, null);
-    c.Gamepad_buttonUpFunc(gamepad_buttonUpFunc, null);
-    c.Gamepad_axisMoveFunc(gamepad_axisMovedFunc, null);
+        c.Gamepad_buttonDownFunc(gamepad_buttonDownFunc, null);
+        c.Gamepad_buttonUpFunc(gamepad_buttonUpFunc, null);
+        c.Gamepad_axisMoveFunc(gamepad_axisMovedFunc, null);
+    }
 
     sg.setup(.{
         .environment = sglue.environment(),
@@ -268,7 +274,9 @@ fn init() callconv(.C) void {
 }
 
 fn frame() callconv(.C) void {
-    c.Gamepad_processEvents();
+    if (config.controllerSupport) {
+        c.Gamepad_processEvents();
+    }
     simgui.newFrame(.{
         .width = sapp.width(),
         .height = sapp.height(),
@@ -427,7 +435,9 @@ fn cleanup() callconv(.C) void {
     state.allocator.free(state.atlas);
     sg.shutdown();
 
-    c.Gamepad_shutdown();
+    if (config.controllerSupport) {
+        c.Gamepad_shutdown();
+    }
 }
 
 fn computeVsParams(rx: f32, ry: f32, rz: f32) math.Mat4 {
@@ -587,8 +597,8 @@ fn createMesh(offset: Vec3) Mesh {
     var mesh: Mesh = .{
         .offset = offset,
         .numIndices = 0,
-        .indexBuffer = undefined,
-        .vertexBuffer = undefined,
+        .indexBuffer = .{},
+        .vertexBuffer = .{},
     };
 
     const chunk = chunks.Chunk.gen_solid_chunk().gen_mesh(state.allocator) catch unreachable;
@@ -682,4 +692,13 @@ test {
     _ = @import("blocks.zig");
 
     @import("std").testing.refAllDecls(@This());
+}
+
+test "cross test" {
+    const v1 = IVec3.new(0, 3, 4);
+    const v2 = IVec3.new(2, 2, 2);
+
+    const out = v1.cross(v2);
+
+    try std.testing.expectEqualDeep(IVec3.new(-2, 8, -6), out);
 }

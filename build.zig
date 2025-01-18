@@ -19,9 +19,11 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const chunkgen = b.option(bool, "chunkGenLog", "Log generating chunks") orelse false;
-
-    const options = b.addOptions();
-    options.addOption(bool, "chunkGenLog", chunkgen);
+    var controllerSupport = !(b.option(
+        bool,
+        "dissableController",
+        "Disstable controller support",
+    ) orelse false);
 
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
@@ -49,35 +51,14 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
 
-    exe.addIncludePath(b.path("externalDeps/libstem_gamepad"));
+    if (target.result.os.tag == .windows) {
+        controllerSupport = false;
+    }
 
-    exe.addCSourceFiles(.{
-        .files = &.{
-            "Gamepad_private.c",
-        },
-        .root = b.path("externalDeps/libstem_gamepad"),
-    });
-
-    const osFile: []const []const u8 = switch (target.result.os.tag) {
-        .linux => &.{
-            "Gamepad_linux.c",
-        },
-        .windows => &.{
-            "Gamepad_windows_dinput.c",
-            "Gamepad_windows_mm.c",
-        },
-        .macos => &.{
-            "Gamepad_macosx.c",
-        },
-        else => @panic("Unkown os"),
-    };
-
-    exe.addCSourceFiles(.{
-        .files = osFile,
-        .root = b.path("externalDeps/libstem_gamepad"),
-    });
+    addControllerSupport(b, target, exe, controllerSupport);
 
     const imports = [_]struct {
         name: []const u8,
@@ -104,6 +85,10 @@ pub fn build(b: *std.Build) !void {
     for (imports) |import| {
         exe.root_module.addImport(import.name, import.dep.module(import.name));
     }
+
+    const options = b.addOptions();
+    options.addOption(bool, "chunkGenLog", chunkgen);
+    options.addOption(bool, "controllerSupport", controllerSupport);
 
     exe.root_module.addOptions("config", options);
 
@@ -142,6 +127,8 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+
+    addControllerSupport(b, target, exe_unit_tests, controllerSupport);
 
     for (imports) |import| {
         exe_unit_tests.root_module.addImport(import.name, import.dep.module(import.name));
@@ -195,4 +182,43 @@ fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
     }
 
     return shdc_step;
+}
+
+fn addControllerSupport(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    compile: *Build.Step.Compile,
+    controllerSupport: bool,
+) void {
+    if (controllerSupport) {
+        compile.addIncludePath(b.path("externalDeps/libstem_gamepad"));
+
+        compile.addCSourceFiles(.{
+            .files = &.{
+                "Gamepad_private.c",
+            },
+            .root = b.path("externalDeps/libstem_gamepad"),
+        });
+
+        const osFile: []const []const u8 = switch (target.result.os.tag) {
+            .linux => &.{
+                "Gamepad_linux.c",
+            },
+            .windows => windows: {
+                break :windows &.{
+                    "Gamepad_windows_dinput.c",
+                    "Gamepad_windows_mm.c",
+                };
+            },
+            .macos => &.{
+                "Gamepad_macosx.c",
+            },
+            else => @panic("Unkown os"),
+        };
+
+        compile.addCSourceFiles(.{
+            .files = osFile,
+            .root = b.path("externalDeps/libstem_gamepad"),
+        });
+    }
 }
