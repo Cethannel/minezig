@@ -26,6 +26,7 @@ pub const Block = struct {
     allocator: std.mem.Allocator,
 
     blockName: []const u8,
+    transparent: bool = false,
 
     free_inner: *const fn (allocator: std.mem.Allocator, inner: *anyopaque) void,
     inner_get_textures_names: getTextureNames,
@@ -118,6 +119,7 @@ pub fn toBlock(inner: anytype, allocator: std.mem.Allocator, name: []const u8) !
 
     out.inner = innerPtr;
     out.allocator = allocator;
+    out.transparent = false;
 
     out.blockName = try allocator.dupe(u8, name);
 
@@ -269,6 +271,12 @@ pub const Cube = struct {
 
     pub fn to_block(self: *const Self, name: []const u8) !Block {
         return toBlock(self.*, self.allocator, name);
+    }
+
+    pub fn to_block_transparent(self: *const Self, name: []const u8) !Block {
+        var block = try toBlock(self.*, self.allocator, name);
+        block.transparent = true;
+        return block;
     }
 };
 

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sokol = @import("sokol");
+pub const sokol = @import("sokol");
 const ig = @import("cimgui");
 const sapp = sokol.app;
 const simgui = sokol.imgui;
@@ -320,7 +320,7 @@ fn frame() callconv(.C) void {
 
     while (state.genChunkQueue.removeOrNull()) |chunkPos| {
         state.chunkMap.genChunk(chunkPos) catch unreachable;
-        state.genChunkMeshQueue.add(chunkPos) catch unreachable;
+        state.chunkMap.regenNeighborMeshes(chunkPos) catch unreachable;
     }
 
     while (state.genChunkMeshQueue.removeOrNull()) |chunkPos| {
@@ -352,20 +352,25 @@ fn frame() callconv(.C) void {
     while (chunkIter.next()) |entry| {
         const pos = entry.key_ptr;
         const chunk = entry.value_ptr;
-        if (chunk.mesh) |mesh| {
-            state.bind.vertex_buffers[0] = mesh.vertexBuffer;
-            state.bind.index_buffer = mesh.indexBuffer;
+        //chunk.render(pos);
 
-            sg.applyBindings(state.bind);
-            const vs_params = shd.VsParams{
-                .mvp = computeVsParams(
-                    @floatFromInt(pos.x * 16),
-                    @floatFromInt(pos.y * 16),
-                    @floatFromInt(pos.z * 16),
-                ),
-            };
-            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-            sg.draw(0, @intCast(mesh.indices.items.len), 1);
+        inline for (chunks.mesh_variants) |variant| {
+            const cMesh: ?chunks.Mesh = @field(chunk, variant ++ "_mesh");
+            if (cMesh) |mesh| {
+                state.bind.vertex_buffers[0] = mesh.vertexBuffer;
+                state.bind.index_buffer = mesh.indexBuffer;
+
+                sg.applyBindings(state.bind);
+                const vs_params = shd.VsParams{
+                    .mvp = computeVsParams(
+                        @floatFromInt(pos.x * 16),
+                        @floatFromInt(pos.y * 16),
+                        @floatFromInt(pos.z * 16),
+                    ),
+                };
+                sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+                sg.draw(0, @intCast(mesh.indices.items.len), 1);
+            }
         }
     }
     sg.endPass();
@@ -388,6 +393,10 @@ fn frame() callconv(.C) void {
     sg.endPass();
 
     sdtx.print("Second\n", .{});
+
+    inline for (.{ "x", "y", "z" }) |dir| {
+        sdtx.print("{s}: {d:.2}\n", .{ dir, @field(state.cameraPos, dir) });
+    }
 
     inline for (.{ KC854, C64, ORIC }) |font| {
         const color = state.colors[font];
@@ -440,7 +449,7 @@ fn cleanup() callconv(.C) void {
     }
 }
 
-fn computeVsParams(rx: f32, ry: f32, rz: f32) math.Mat4 {
+pub fn computeVsParams(rx: f32, ry: f32, rz: f32) math.Mat4 {
     const color = state.colors[KC854];
     sdtx.font(KC854);
     sdtx.color3b(color.r, color.g, color.b);
@@ -639,44 +648,43 @@ fn calcPos(pitch: f32, yaw: f32, offset: f32) Vec3 {
 
 fn defaultBlocks() !void {
     try state.blocksArr.appendSlice(
-        &.{
-            try (try blocks.Cube.init_all(
-                state.allocator,
-                .{ .file = "bricks.png" },
-            )).to_block("bricks"),
-            try (try blocks.Cube.init_all(
-                state.allocator,
-                .{ .file = "dirt.png" },
-            )).to_block("dirt"),
-            try (try blocks.Cube.init_all(
-                state.allocator,
-                .{ .file = "stone.png" },
-            )).to_block("stone"),
-            try (try blocks.Cube.init_sides(
-                state.allocator,
-                .{
-                    .TopBotOthers = .{
-                        .top = .{
-                            .file = "grass_top.png",
-                            .colorOveride = .{
-                                .x = 124.0 / 256.0,
-                                .y = 189.0 / 256.0,
-                                .z = 107.0 / 256.0,
-                            },
-                        },
-                        .other = .{ .file = "grass_side.png" },
-                        .bot = .{ .file = "dirt.png" },
-                    },
-                },
-            )).to_block("grass"),
-            try (try blocks.Slab.init_sides(state.allocator, .{
+        &.{ try (try blocks.Cube.init_all(
+            state.allocator,
+            .{ .file = "bricks.png" },
+        )).to_block("bricks"), try (try blocks.Cube.init_all(
+            state.allocator,
+            .{ .file = "dirt.png" },
+        )).to_block("dirt"), try (try blocks.Cube.init_all(
+            state.allocator,
+            .{ .file = "stone.png" },
+        )).to_block("stone"), try (try blocks.Cube.init_sides(
+            state.allocator,
+            .{
                 .TopBotOthers = .{
-                    .top = .{ .file = "stone_slab_top.png" },
-                    .other = .{ .file = "stone_slab_side.png" },
-                    .bot = .{ .file = "stone_slab_top.png" },
+                    .top = .{
+                        .file = "grass_top.png",
+                        .colorOveride = .{
+                            .x = 124.0 / 256.0,
+                            .y = 189.0 / 256.0,
+                            .z = 107.0 / 256.0,
+                        },
+                    },
+                    .other = .{ .file = "grass_side.png" },
+                    .bot = .{ .file = "dirt.png" },
                 },
-            })).to_block("stone_slab"),
-        },
+            },
+        )).to_block("grass"), try (try blocks.Slab.init_sides(state.allocator, .{
+            .TopBotOthers = .{
+                .top = .{ .file = "stone_slab_top.png" },
+                .other = .{ .file = "stone_slab_side.png" },
+                .bot = .{ .file = "stone_slab_top.png" },
+            },
+        })).to_block("stone_slab"), try (try blocks.Cube.init_all(
+            state.allocator,
+            .{
+                .file = "glass.png",
+            },
+        )).to_block("glass") },
     );
 }
 

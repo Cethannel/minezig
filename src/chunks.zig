@@ -1,5 +1,6 @@
 const std = @import("std");
 const root = @import("main.zig");
+const shd = @import("shaders/cube.glsl.zig");
 
 const config = @import("config");
 
@@ -25,6 +26,8 @@ pub const chunkWidth = 16;
 pub const chunkHeight = 256;
 const fChunkHeight: comptime_float = @floatFromInt(chunkHeight);
 const fHalfChunkHeight: comptime_float = fChunkHeight / 2.0;
+
+pub const mesh_variants = &.{ "solid", "transparent" };
 
 pub const BlockId = enum(u32) {
     Air = 0,
@@ -84,6 +87,11 @@ pub const Chunk = struct {
     blocks: [chunkWidth][chunkHeight][chunkWidth]Block,
     sides: Sides,
 
+    pub const MeshData = struct {
+        vertices: std.ArrayList(root.Vertex),
+        indices: std.ArrayList(u32),
+    };
+
     pub fn gen_solid_chunk() @This() {
         const idThing: u32 = 1;
         const blocks = .{.{.{Block{ .id = @enumFromInt(idThing) }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
@@ -142,6 +150,7 @@ pub const Chunk = struct {
 
         const stoneId = Blocks.getBlockId("stone").?;
         const grassId = Blocks.getBlockId("grass").?;
+        const glassId = Blocks.getBlockId("glass").?;
 
         const chunkGlobalPos = chunkToWorldPos(chunkPos);
 
@@ -162,7 +171,11 @@ pub const Chunk = struct {
                     } else if (dy >= -0.1 and dy <= 0.1) {
                         out.blocks[x][y][z].id = @enumFromInt(grassId);
                     } else {
-                        out.blocks[x][y][z].id = .Air;
+                        if (y < 128) {
+                            out.blocks[x][y][z].id = @enumFromInt(glassId);
+                        } else {
+                            out.blocks[x][y][z].id = .Air;
+                        }
                     }
                 }
             }
@@ -174,13 +187,17 @@ pub const Chunk = struct {
     }
 
     pub fn gen_mesh(self: *const @This(), neighbor_sides: Sides, allocator: std.mem.Allocator) !struct {
-        vertices: std.ArrayList(root.Vertex),
-        indices: std.ArrayList(u32),
+        solid: MeshData,
+        transparent: MeshData,
     } {
-        var maxOffset: u32 = 0;
+        var solid_maxOffset: u32 = 0;
+        var transparent_maxOffset: u32 = 0;
 
-        var vertices = std.ArrayList(root.Vertex).init(allocator);
-        var indices = std.ArrayList(u32).init(allocator);
+        var solid_vertices = std.ArrayList(root.Vertex).init(allocator);
+        var solid_indices = std.ArrayList(u32).init(allocator);
+
+        var transparent_vertices = std.ArrayList(root.Vertex).init(allocator);
+        var transparent_indices = std.ArrayList(u32).init(allocator);
 
         for (self.blocks, 0..) |slice, x| {
             for (slice, 0..) |col, y| {
@@ -230,11 +247,14 @@ pub const Chunk = struct {
                                 else => @panic("Index should not excede 5"),
                             }
 
-                            if (neighborBlock.id != .Air) {
+                            const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
+                            const neighborStruct = state.blocksArr.items[@intFromEnum(neighborBlock.id)];
+
+                            if (neighborBlock.id != .Air and blockStruct.transparent == neighborStruct.transparent) {
                                 continue :face;
                             }
 
-                            const indexOffset = maxOffset;
+                            const indexOffset = if (blockStruct.transparent) transparent_maxOffset else solid_maxOffset;
                             const vert = try state.blocksArr.items[@intFromEnum(block.id)].gen_vertices_sides(
                                 index1,
                                 zlm.vec3(@floatFromInt(x), @floatFromInt(y), @floatFromInt(z)),
@@ -243,29 +263,56 @@ pub const Chunk = struct {
                                 var i = index1 * 4 + index2;
 
                                 if (index2 < 4) {
-                                    try vertices.append(vert[index2]);
+                                    if (blockStruct.transparent) {
+                                        try transparent_vertices.append(vert[index2]);
+                                    } else {
+                                        try solid_vertices.append(vert[index2]);
+                                    }
                                 }
 
                                 i = index1 * 6 + index2;
 
                                 const index = baseIndices[i];
-                                const newIndex = index + indexOffset;
-                                try indices.append(newIndex);
-
-                                if (newIndex > maxOffset) {
-                                    maxOffset = newIndex;
+                                const newIndex: u32 = index + indexOffset;
+                                if (blockStruct.transparent) {
+                                    try transparent_indices.append(newIndex);
+                                    if (newIndex > transparent_maxOffset) {
+                                        transparent_maxOffset = newIndex;
+                                    }
+                                } else {
+                                    try solid_indices.append(newIndex);
+                                    if (newIndex > solid_maxOffset) {
+                                        solid_maxOffset = newIndex;
+                                    }
                                 }
                             }
-                            maxOffset += 1;
+                            if (blockStruct.transparent) {
+                                transparent_maxOffset += 1;
+                            } else {
+                                solid_maxOffset += 1;
+                            }
                         }
                     }
                 }
             }
         }
 
+        if (solid_indices.items.len == 0 //
+        and solid_vertices.items.len == 0 //
+        and transparent_vertices.items.len == 0 //
+        and transparent_indices.items.len == 0) {
+            std.log.info("Empty chunk: {any}", .{self.blocks});
+        }
+
         return .{
-            .vertices = vertices,
-            .indices = indices,
+            .solid = MeshData{
+                .indices = solid_indices,
+                .vertices = solid_vertices,
+            },
+            .transparent = MeshData{
+                .indices = transparent_indices,
+                .vertices = transparent_vertices,
+            },
         };
     }
 
@@ -326,7 +373,8 @@ pub const ChunkMap = struct {
 
         const rchunk = RenderChunk{
             .chunk = chunk,
-            .mesh = null,
+            .solid_mesh = null,
+            .transparent_mesh = null,
         };
 
         try self.map.put(chunkPos, rchunk);
@@ -342,7 +390,7 @@ pub const ChunkMap = struct {
                 const offset = IVec3.new(x, 0, z);
 
                 if (self.map.get(chunkPos.add(offset))) |rChunk| {
-                    if (rChunk.mesh != null) {
+                    if (rChunk.solid_mesh != null or rchunk.transparent_mesh != null) {
                         try self.genMesh(chunkPos.add(offset));
                     }
                 }
@@ -359,32 +407,39 @@ pub const ChunkMap = struct {
             std.log.info("Generating chunk at: {}", .{chunkPos});
         }
         if (self.map.getPtr(chunkPos)) |rChunk| {
-            if (rChunk.mesh) |*mesh| {
-                mesh.deinit();
-            }
+            rChunk.clear_meshes();
 
             const neighbors = self.genNeigbors(chunkPos);
 
             const meshData = try rChunk.chunk.gen_mesh(neighbors, self.allocator);
-            errdefer meshData.indices.deinit();
-            errdefer meshData.vertices.deinit();
 
-            const vertexBuffer = sg.makeBuffer(.{
-                .data = sg.asRange(meshData.vertices.items),
-            });
-            const indexBuffer = sg.makeBuffer(.{
-                .type = .INDEXBUFFER,
-                .data = sg.asRange(meshData.indices.items),
-            });
+            inline for (mesh_variants) |variant| {
+                const data: Chunk.MeshData = @field(meshData, variant);
+                errdefer data.indices.deinit();
+                errdefer data.vertices.deinit();
 
-            const mesh = Mesh{
-                .vertices = meshData.vertices,
-                .indices = meshData.indices,
-                .vertexBuffer = vertexBuffer,
-                .indexBuffer = indexBuffer,
-            };
+                if (data.indices.items.len == 0 or data.vertices.items.len == 0) {
+                    data.indices.deinit();
+                    data.vertices.deinit();
+                } else {
+                    const vertexBuffer = sg.makeBuffer(.{
+                        .data = sg.asRange(data.vertices.items),
+                    });
+                    const indexBuffer = sg.makeBuffer(.{
+                        .type = .INDEXBUFFER,
+                        .data = sg.asRange(data.indices.items),
+                    });
 
-            rChunk.mesh = mesh;
+                    const mesh = Mesh{
+                        .vertices = data.vertices,
+                        .indices = data.indices,
+                        .vertexBuffer = vertexBuffer,
+                        .indexBuffer = indexBuffer,
+                    };
+
+                    @field(rChunk, variant ++ "_mesh") = mesh;
+                }
+            }
         } else {
             return error.ChunkNotFound;
         }
@@ -395,8 +450,10 @@ pub const ChunkMap = struct {
 
         while (iter.next()) |val| {
             const rChunk = val.value_ptr;
-            if (rChunk.mesh) |*mesh| {
-                mesh.deinit();
+            inline for (mesh_variants) |variant| {
+                if (@field(rChunk, variant ++ "_mesh")) |*mesh| {
+                    mesh.deinit();
+                }
             }
         }
 
@@ -423,11 +480,59 @@ pub const ChunkMap = struct {
 
         return out;
     }
+
+    pub fn regenNeighborMeshes(self: *const @This(), chunkPos: IVec3) !void {
+        inline for ([_][]const u8{ "x", "z" }) |dir| {
+            inline for ([_]i64{ 1, -1 }) |offset| {
+                var offsetVec = IVec3.zero;
+                @field(offsetVec, dir) = offset;
+
+                const newPos = chunkPos.add(offsetVec);
+                if (self.map.getPtr(newPos)) |neibor| {
+                    if (neibor.transparent_mesh != null or neibor.solid_mesh != null) {
+                        try state.genChunkMeshQueue.add(newPos);
+                    }
+                }
+            }
+        }
+    }
 };
 
 pub const RenderChunk = struct {
     chunk: Chunk,
-    mesh: ?Mesh,
+    solid_mesh: ?Mesh,
+    transparent_mesh: ?Mesh,
+
+    pub fn clear_meshes(self: *@This()) void {
+        inline for (mesh_variants) |variant| {
+            if (@field(self, variant ++ "_mesh")) |*mesh| {
+                mesh.deinit();
+            }
+
+            @field(self, variant ++ "_mesh") = null;
+        }
+    }
+
+    pub fn render(self: *const @This(), pos: *const IVec3) void {
+        inline for (mesh_variants) |variant| {
+            const cMesh: ?Mesh = @field(self, variant ++ "_mesh");
+            if (cMesh) |mesh| {
+                state.bind.vertex_buffers[0] = mesh.vertexBuffer;
+                state.bind.index_buffer = mesh.indexBuffer;
+
+                sg.applyBindings(state.bind);
+                const vs_params = shd.VsParams{
+                    .mvp = root.computeVsParams(
+                        @floatFromInt(pos.x * 16),
+                        @floatFromInt(pos.y * 16),
+                        @floatFromInt(pos.z * 16),
+                    ),
+                };
+                sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+                sg.draw(0, @intCast(mesh.indices.items.len), 1);
+            }
+        }
+    }
 };
 
 pub const Mesh = struct {
@@ -471,7 +576,7 @@ fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
     }
 
     if (state.chunkMap.get(toGenPos)) |chunk| {
-        if (chunk.mesh == null) {
+        if (chunk.solid_mesh == null and chunk.transparent_mesh == null) {
             try state.genChunkMeshQueue.add(toGenPos);
         }
 
@@ -487,10 +592,7 @@ fn outRangeDel(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
     }
 
     if (state.chunkMap.getPtr(toGenPos)) |chunk| {
-        if (chunk.mesh) |*mesh| {
-            mesh.deinit();
-            chunk.mesh = null;
-        }
+        chunk.clear_meshes();
     }
 }
 
