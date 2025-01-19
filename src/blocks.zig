@@ -467,6 +467,12 @@ pub const Slab = struct {
     pub fn to_block(self: *const Self, name: []const u8) !Block {
         return toBlock(self.*, self.allocator, name);
     }
+
+    pub fn to_block_transparent(self: *const Self, name: []const u8) !Block {
+        var block = try toBlock(self.*, self.allocator, name);
+        block.transparent = true;
+        return block;
+    }
 };
 
 fn getNumberTextures() usize {
@@ -693,6 +699,113 @@ pub const AirBlock = Block{
     .inner_deinit = undefined,
     .inner_get_textures_names = @ptrCast(&Air.get_textures_names),
     .inner_gen_vertices_sides = @ptrCast(&Air.gen_vertices_sides),
+};
+
+pub const Fluid = struct {
+    allocator: std.mem.Allocator,
+    sides: Sides,
+
+    const Self = @This();
+
+    pub fn init_all(allocator: std.mem.Allocator, all: SideInfo) !Self {
+        const sides = try all.dupe(allocator);
+
+        return Self{
+            .allocator = allocator,
+            .sides = .{
+                .All = sides,
+            },
+        };
+    }
+
+    pub fn init_sides(allocator: std.mem.Allocator, sides: Sides) !Self {
+        const newSides = try sides.dupe(allocator);
+
+        return Self{
+            .allocator = allocator,
+            .sides = newSides,
+        };
+    }
+
+    pub fn get_textures_names(self: *const Self, allocator: *const std.mem.Allocator) callconv(.C) ?*[][]const u8 {
+        return generic_get_textures_names(self, allocator) catch return null;
+    }
+
+    pub fn gen_vertices_sides(
+        self: *const Self,
+        side: usize,
+        pos: zlm.Vec3,
+        out: *[4]root.Vertex,
+    ) callconv(.C) bool {
+        const numIndices = getNumberTextures();
+
+        for (0..4) |i| {
+            var newVertex = baseVertices[side * 4 + i];
+            newVertex.pos.y *= (15.0 / 16.0);
+            newVertex.pos.x += pos.x;
+            newVertex.pos.y += pos.y;
+            newVertex.pos.z += pos.z;
+
+            const texInfo = swi: switch (self.sides) {
+                .All => |all| all,
+                .TopOthers => |topOthers| {
+                    var texName = topOthers.other;
+                    if (side == 5) {
+                        texName = topOthers.top;
+                    }
+                    break :swi texName;
+                },
+                .TopBotOthers => |topOthers| {
+                    var texName = topOthers.other;
+                    if (side == 5) {
+                        texName = topOthers.top;
+                    }
+                    if (side == 4) {
+                        texName = topOthers.bot;
+                    }
+                    break :swi texName;
+                },
+            };
+            const textureIndex = state.textureMap.get(texInfo.file) orelse return false;
+
+            newVertex.modifierColor = texInfo.colorOveride;
+
+            newVertex.v /= @as(f32, @floatFromInt(numIndices)) * 2;
+            newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
+                @as(f32, @floatFromInt(numIndices));
+
+            out[i] = newVertex;
+        }
+
+        return true;
+    }
+
+    pub fn deinit(self: *Self) callconv(.C) void {
+        switch (self.sides) {
+            .All => |sides| {
+                sides.deinit(self.allocator);
+            },
+            .TopOthers => |sides| {
+                sides.top.deinit(self.allocator);
+                sides.other.deinit(self.allocator);
+            },
+            .TopBotOthers => |sides| {
+                sides.top.deinit(self.allocator);
+                sides.other.deinit(self.allocator);
+                sides.bot.deinit(self.allocator);
+            },
+        }
+    }
+
+    pub fn to_block(self: *const Self, name: []const u8) !Block {
+        return toBlock(self.*, self.allocator, name);
+    }
+
+    pub fn to_block_transparent(self: *const Self, name: []const u8) !Block {
+        var block = try toBlock(self.*, self.allocator, name);
+        block.transparent = true;
+        return block;
+    }
 };
 
 pub fn getBlockId(blockName: []const u8) ?u32 {

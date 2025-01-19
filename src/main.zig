@@ -683,43 +683,56 @@ fn calcPos(pitch: f32, yaw: f32, offset: f32) Vec3 {
 
 fn defaultBlocks() !void {
     try state.blocksArr.appendSlice(
-        &.{ try (try blocks.Cube.init_all(
-            state.allocator,
-            .{ .file = "bricks.png" },
-        )).to_block("bricks"), try (try blocks.Cube.init_all(
-            state.allocator,
-            .{ .file = "dirt.png" },
-        )).to_block("dirt"), try (try blocks.Cube.init_all(
-            state.allocator,
-            .{ .file = "stone.png" },
-        )).to_block("stone"), try (try blocks.Cube.init_sides(
-            state.allocator,
-            .{
-                .TopBotOthers = .{
-                    .top = .{
-                        .file = "grass_top.png",
-                        .colorOveride = .{
-                            .x = 124.0 / 256.0,
-                            .y = 189.0 / 256.0,
-                            .z = 107.0 / 256.0,
+        &.{
+            try (try blocks.Cube.init_all(
+                state.allocator,
+                .{ .file = "bricks.png" },
+            )).to_block("bricks"),
+            try (try blocks.Cube.init_all(
+                state.allocator,
+                .{ .file = "dirt.png" },
+            )).to_block("dirt"),
+            try (try blocks.Cube.init_all(
+                state.allocator,
+                .{ .file = "stone.png" },
+            )).to_block("stone"),
+            try (try blocks.Cube.init_sides(
+                state.allocator,
+                .{
+                    .TopBotOthers = .{
+                        .top = .{
+                            .file = "grass_top.png",
+                            .colorOveride = .{
+                                .x = 124.0 / 256.0,
+                                .y = 189.0 / 256.0,
+                                .z = 107.0 / 256.0,
+                            },
                         },
+                        .other = .{ .file = "grass_side.png" },
+                        .bot = .{ .file = "dirt.png" },
                     },
-                    .other = .{ .file = "grass_side.png" },
-                    .bot = .{ .file = "dirt.png" },
                 },
-            },
-        )).to_block("grass"), try (try blocks.Slab.init_sides(state.allocator, .{
-            .TopBotOthers = .{
-                .top = .{ .file = "stone_slab_top.png" },
-                .other = .{ .file = "stone_slab_side.png" },
-                .bot = .{ .file = "stone_slab_top.png" },
-            },
-        })).to_block("stone_slab"), try (try blocks.Cube.init_all(
-            state.allocator,
-            .{
-                .file = "glass.png",
-            },
-        )).to_block_transparent("glass") },
+            )).to_block("grass"),
+            try (try blocks.Slab.init_sides(state.allocator, .{
+                .TopBotOthers = .{
+                    .top = .{ .file = "stone_slab_top.png" },
+                    .other = .{ .file = "stone_slab_side.png" },
+                    .bot = .{ .file = "stone_slab_top.png" },
+                },
+            })).to_block("stone_slab"),
+            try (try blocks.Cube.init_all(
+                state.allocator,
+                .{
+                    .file = "glass.png",
+                },
+            )).to_block_transparent("glass"),
+            try (try blocks.Fluid.init_all(
+                state.allocator,
+                .{
+                    .file = "water_still.png",
+                },
+            )).to_block_transparent("water"),
+        },
     );
 }
 

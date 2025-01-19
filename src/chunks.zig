@@ -150,7 +150,7 @@ pub const Chunk = struct {
 
         const stoneId = Blocks.getBlockId("stone").?;
         const grassId = Blocks.getBlockId("grass").?;
-        const glassId = Blocks.getBlockId("glass").?;
+        const waterId = Blocks.getBlockId("water").?;
 
         const chunkGlobalPos = chunkToWorldPos(chunkPos);
 
@@ -172,7 +172,7 @@ pub const Chunk = struct {
                         out.blocks[x][y][z].id = @enumFromInt(grassId);
                     } else {
                         if (y < 128) {
-                            out.blocks[x][y][z].id = @enumFromInt(glassId);
+                            out.blocks[x][y][z].id = @enumFromInt(waterId);
                         } else {
                             out.blocks[x][y][z].id = .Air;
                         }
