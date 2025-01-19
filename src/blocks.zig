@@ -4,51 +4,70 @@ const zlm = @import("zlm");
 
 const root = @import("main.zig");
 
+const utils = @import("utils.zig");
+
 const state = &root.state;
 
-pub const Block = struct {
+pub const Block = extern struct {
     const getTextureNames = *const fn (
         self: *const anyopaque,
-        allocator: std.mem.Allocator,
-    ) anyerror![][]const u8;
+        allocator: *const std.mem.Allocator,
+    ) callconv(.C) ?*[][]const u8;
 
     const deinitFn = *const fn (
         self: *anyopaque,
-    ) void;
+    ) callconv(.C) void;
 
     const genVerticesSidesFn = *const fn (
         self: *const anyopaque,
         side: usize,
         pos: zlm.Vec3,
-    ) anyerror![4]root.Vertex;
+        out: *[4]root.Vertex,
+    ) callconv(.C) bool;
 
     inner: *anyopaque,
-    allocator: std.mem.Allocator,
+    allocator: *const std.mem.Allocator,
 
-    blockName: []const u8,
+    blockName: *const []const u8,
     transparent: bool = false,
 
-    free_inner: *const fn (allocator: std.mem.Allocator, inner: *anyopaque) void,
+    free_inner: *const fn (allocator: *const std.mem.Allocator, inner: *anyopaque) callconv(.C) void,
     inner_get_textures_names: getTextureNames,
     inner_gen_vertices_sides: genVerticesSidesFn,
     inner_deinit: deinitFn,
 
-    pub inline fn get_textures_names(self: *const @This(), allocator: std.mem.Allocator) ![][]const u8 {
-        return self.inner_get_textures_names(self.inner, allocator);
+    pub fn get_textures_names(self: *const @This(), allocator: std.mem.Allocator) ![][]const u8 {
+        const innerOut = self.inner_get_textures_names(self.inner, &allocator);
+
+        if (innerOut) |out| {
+            defer allocator.destroy(out);
+            return out.*;
+        } else {
+            return error.GetTextureNames;
+        }
     }
 
     pub inline fn gen_vertices_sides(self: *const @This(), side: usize, pos: zlm.Vec3) ![4]root.Vertex {
-        return self.inner_gen_vertices_sides(self.inner, side, pos);
+        var out: [4]root.Vertex = undefined;
+
+        if (self.inner_gen_vertices_sides(self.inner, side, pos, &out)) {
+            return out;
+        } else {
+            return error.GenVerticesSides;
+        }
     }
 
     pub fn deinit(self: *@This()) void {
-        if (std.mem.eql(u8, "air", self.blockName)) {
+        if (std.mem.eql(u8, "air", self.blockName.*)) {
             return;
         }
 
         self.inner_deinit(self.inner);
-        self.allocator.free(self.blockName);
+        self.allocator.free(self.blockName.*);
+        self.allocator.destroy(self.blockName);
         self.free_inner(self.allocator, self.inner);
+        const alocClone = self.allocator.*;
+        alocClone.destroy(self.allocator);
     }
 };
 
@@ -100,7 +119,7 @@ pub const Sides = union(enum) {
 
 fn freeGenerice(t: type) type {
     return struct {
-        fn free(allocator: std.mem.Allocator, inner: *anyopaque) void {
+        fn free(allocator: *const std.mem.Allocator, inner: *anyopaque) callconv(.C) void {
             const thing: *t = @alignCast(@ptrCast(inner));
             allocator.destroy(thing);
         }
@@ -118,10 +137,20 @@ pub fn toBlock(inner: anytype, allocator: std.mem.Allocator, name: []const u8) !
     innerPtr.* = inner;
 
     out.inner = innerPtr;
-    out.allocator = allocator;
+    const allocPtr = try allocator.create(std.mem.Allocator);
+    errdefer allocator.destroy(allocPtr);
+    allocPtr.* = allocator;
+    out.allocator = allocPtr;
     out.transparent = false;
 
-    out.blockName = try allocator.dupe(u8, name);
+    const dupedName = try allocator.dupe(u8, name);
+    errdefer allocator.free(dupedName);
+
+    const namePtr = try allocator.create([]u8);
+    errdefer allocator.destroy(namePtr);
+    namePtr.* = dupedName;
+
+    out.blockName = namePtr;
 
     out.free_inner = &freeGenerice(iType).free;
 
@@ -138,6 +167,89 @@ pub fn toBlock(inner: anytype, allocator: std.mem.Allocator, name: []const u8) !
                 other_field_name,
                 field.type,
             }));
+        }
+
+        const otherFieldType = @TypeOf(@field(iType, other_field_name));
+        const otherFieldTypeInfo = @typeInfo(otherFieldType);
+
+        const genFieldTypeInfo = @typeInfo(field.type);
+
+        switch (genFieldTypeInfo) {
+            .pointer => |ptrInfo| {
+                const childTypeInfo: std.builtin.Type = @typeInfo(ptrInfo.child);
+                switch (childTypeInfo) {
+                    .@"fn" => |fnInfo| {
+                        if (otherFieldTypeInfo != .@"fn") {
+                            @compileError("FixME");
+                        }
+                        const fnInfoActual = @as(std.builtin.Type.Fn, fnInfo);
+                        const iFnInfoActual = @as(std.builtin.Type.Fn, otherFieldTypeInfo.@"fn");
+
+                        if (fnInfoActual.calling_convention != iFnInfoActual.calling_convention) {
+                            @compileError(std.fmt.comptimePrint(
+                                "For function: {s}.{s}\n" ++ //
+                                    "Expected calling convention: `{s}` but" ++ //
+                                    " found convention: `{s}`",
+                                .{
+                                    @typeName(iType),
+                                    other_field_name,
+                                    @tagName(fnInfoActual.calling_convention),
+                                    @tagName(iFnInfoActual.calling_convention),
+                                },
+                            ));
+                        }
+
+                        if (fnInfoActual.return_type != iFnInfoActual.return_type) {
+                            @compileError(std.fmt.comptimePrint(
+                                \\ For function: {s}.{s}
+                                \\ Expected return type to be:
+                                \\ {s}
+                                \\ but found type:
+                                \\ {s}
+                            ,
+                                .{
+                                    @typeName(iType),
+                                    other_field_name,
+                                    utils.optionalTypeName(fnInfoActual.return_type),
+                                    utils.optionalTypeName(iFnInfoActual.return_type),
+                                },
+                            ));
+                        }
+
+                        inline for (iFnInfoActual.params, 0..) |iParam, i| {
+                            const param = fnInfoActual.params[i];
+                            const paramTInfo: std.builtin.Type = @typeInfo(param.type.?);
+                            const iParamTInfo: std.builtin.Type = @typeInfo(iParam.type.?);
+
+                            if (paramTInfo == .pointer and iParamTInfo == .pointer) {
+                                if (iParamTInfo.pointer.child == iType and paramTInfo.pointer.child == anyopaque) {
+                                    continue;
+                                }
+                            }
+
+                            if (param.type != iParam.type) {
+                                @compileError(std.fmt.comptimePrint(
+                                    \\ For function: {s}.{s}
+                                    \\ Expected param[{}] to be of type:
+                                    \\ {s}
+                                    \\ but found type:
+                                    \\ {s}
+                                ,
+                                    .{
+                                        @typeName(iType),
+                                        other_field_name,
+                                        i,
+                                        @typeName(param.type.?),
+                                        @typeName(iParam.type.?),
+                                    },
+                                ));
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            },
+            else => {},
         }
 
         @field(out, field.name) = @ptrCast(&@field(iType, other_field_name));
@@ -172,44 +284,20 @@ pub const Cube = struct {
         };
     }
 
-    pub fn get_textures_names(self: *const Self, allocator: std.mem.Allocator) anyerror![][]const u8 {
-        switch (self.sides) {
-            .All => |sides| {
-                const out = try allocator.alloc([]const u8, 1);
-                errdefer allocator.free(out);
-
-                out[0] = try allocator.dupe(u8, sides.file);
-
-                return out;
-            },
-            .TopOthers => |sides| {
-                const out = try allocator.alloc([]const u8, 2);
-                errdefer allocator.free(out);
-
-                out[0] = try allocator.dupe(u8, sides.top.file);
-                out[1] = try allocator.dupe(u8, sides.other.file);
-
-                return out;
-            },
-            .TopBotOthers => |sides| {
-                const out = try allocator.alloc([]const u8, 3);
-                errdefer allocator.free(out);
-
-                out[0] = try allocator.dupe(u8, sides.top.file);
-                out[1] = try allocator.dupe(u8, sides.other.file);
-                out[2] = try allocator.dupe(u8, sides.bot.file);
-
-                return out;
-            },
-        }
+    pub fn get_textures_names(
+        self: *const Self,
+        allocator: *const std.mem.Allocator,
+    ) callconv(.C) ?*[][]const u8 {
+        return generic_get_textures_names(self, allocator) catch return null;
     }
 
     pub fn gen_vertices_sides(
         self: *const Self,
         side: usize,
         pos: zlm.Vec3,
-    ) ![4]root.Vertex {
-        var out: [4]root.Vertex = undefined;
+        out: *[4]root.Vertex,
+    ) callconv(.C) bool {
+        //var out: [4]root.Vertex = undefined;
         const numIndices = getNumberTextures();
 
         for (0..4) |i| {
@@ -238,7 +326,7 @@ pub const Cube = struct {
                     break :swi texName;
                 },
             };
-            const textureIndex = state.textureMap.get(texInfo.file).?;
+            const textureIndex = state.textureMap.get(texInfo.file) orelse return false;
 
             newVertex.modifierColor = texInfo.colorOveride;
 
@@ -249,10 +337,10 @@ pub const Cube = struct {
             out[i] = newVertex;
         }
 
-        return out;
+        return true;
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) callconv(.C) void {
         switch (self.sides) {
             .All => |sides| {
                 sides.deinit(self.allocator);
@@ -306,44 +394,16 @@ pub const Slab = struct {
         };
     }
 
-    pub fn get_textures_names(self: *const Self, allocator: std.mem.Allocator) anyerror![][]const u8 {
-        switch (self.sides) {
-            .All => |sides| {
-                const out = try allocator.alloc([]const u8, 1);
-                errdefer allocator.free(out);
-
-                out[0] = try allocator.dupe(u8, sides.file);
-
-                return out;
-            },
-            .TopOthers => |sides| {
-                const out = try allocator.alloc([]const u8, 2);
-                errdefer allocator.free(out);
-
-                out[0] = try allocator.dupe(u8, sides.top.file);
-                out[1] = try allocator.dupe(u8, sides.other.file);
-
-                return out;
-            },
-            .TopBotOthers => |sides| {
-                const out = try allocator.alloc([]const u8, 3);
-                errdefer allocator.free(out);
-
-                out[0] = try allocator.dupe(u8, sides.top.file);
-                out[1] = try allocator.dupe(u8, sides.other.file);
-                out[2] = try allocator.dupe(u8, sides.bot.file);
-
-                return out;
-            },
-        }
+    pub fn get_textures_names(self: *const Self, allocator: *const std.mem.Allocator) callconv(.C) ?*[][]const u8 {
+        return generic_get_textures_names(self, allocator) catch return null;
     }
 
     pub fn gen_vertices_sides(
         self: *const Self,
         side: usize,
         pos: zlm.Vec3,
-    ) ![4]root.Vertex {
-        var out: [4]root.Vertex = undefined;
+        out: *[4]root.Vertex,
+    ) callconv(.C) bool {
         const numIndices = getNumberTextures();
 
         for (0..4) |i| {
@@ -373,7 +433,7 @@ pub const Slab = struct {
                     break :swi texName;
                 },
             };
-            const textureIndex = state.textureMap.get(texInfo.file).?;
+            const textureIndex = state.textureMap.get(texInfo.file) orelse return false;
 
             newVertex.modifierColor = texInfo.colorOveride;
 
@@ -384,10 +444,10 @@ pub const Slab = struct {
             out[i] = newVertex;
         }
 
-        return out;
+        return true;
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) callconv(.C) void {
         switch (self.sides) {
             .All => |sides| {
                 sides.deinit(self.allocator);
@@ -628,7 +688,7 @@ const air = Air{};
 pub const AirBlock = Block{
     .inner = @constCast(@ptrCast(&air)),
     .allocator = undefined,
-    .blockName = "air",
+    .blockName = &"air",
     .free_inner = undefined,
     .inner_deinit = undefined,
     .inner_get_textures_names = @ptrCast(&Air.get_textures_names),
@@ -637,12 +697,48 @@ pub const AirBlock = Block{
 
 pub fn getBlockId(blockName: []const u8) ?u32 {
     for (state.blocksArr.items, 0..) |name, i| {
-        if (std.mem.eql(u8, name.blockName, blockName)) {
+        if (std.mem.eql(u8, name.blockName.*, blockName)) {
             return @intCast(i);
         }
     }
 
     return null;
+}
+
+fn generic_get_textures_names(self: anytype, allocator: *const std.mem.Allocator) !*[][]const u8 {
+    const outPtr = try allocator.create([][]const u8);
+    errdefer allocator.destroy(outPtr);
+    switch (self.sides) {
+        .All => |sides| {
+            const out = try allocator.alloc([]const u8, 1);
+            errdefer allocator.free(out);
+
+            out[0] = try allocator.dupe(u8, sides.file);
+
+            outPtr.* = out;
+        },
+        .TopOthers => |sides| {
+            const out = try allocator.alloc([]const u8, 2);
+            errdefer allocator.free(out);
+
+            out[0] = try allocator.dupe(u8, sides.top.file);
+            out[1] = try allocator.dupe(u8, sides.other.file);
+
+            outPtr.* = out;
+        },
+        .TopBotOthers => |sides| {
+            const out = try allocator.alloc([]const u8, 3);
+            errdefer allocator.free(out);
+
+            out[0] = try allocator.dupe(u8, sides.top.file);
+            out[1] = try allocator.dupe(u8, sides.other.file);
+            out[2] = try allocator.dupe(u8, sides.bot.file);
+
+            outPtr.* = out;
+        },
+    }
+
+    return outPtr;
 }
 
 test "Cube Block" {

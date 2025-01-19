@@ -111,6 +111,14 @@ test "Single thread test" {
 
 var otherDone = false;
 
+pub fn optionalTypeName(comptime T: ?type) [:0]const u8 {
+    if (T) |t| {
+        return @typeName(t);
+    } else {
+        return @typeName(void);
+    }
+}
+
 fn otherThread(data: []const dataType, queue: *mspc(dataType)) void {
     for (data) |value| {
         queue.enqueue(value) catch unreachable;
