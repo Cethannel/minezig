@@ -818,6 +818,14 @@ pub fn getBlockId(blockName: []const u8) ?u32 {
     return null;
 }
 
+pub fn getBlockFromId(id: u32) ?Block {
+    if (state.blocksArr.items.len <= id) {
+        return null;
+    }
+
+    return state.blocksArr.items[id];
+}
+
 fn generic_get_textures_names(self: anytype, allocator: *const std.mem.Allocator) !*[][]const u8 {
     const outPtr = try allocator.create([][]const u8);
     errdefer allocator.destroy(outPtr);

@@ -8,6 +8,8 @@ const fastnoise = @import("fastnoise.zig");
 
 const Blocks = @import("blocks.zig");
 
+const utils = @import("utils.zig");
+
 const sokol = @import("sokol");
 const sapp = sokol.app;
 const sg = sokol.gfx;
@@ -500,6 +502,15 @@ pub const ChunkMap = struct {
             }
         }
     }
+
+    pub fn set_block(self: *@This(), pos: IVec3, block: Block) !void {
+        const poss = worldToChunkPos(utils.ivec3ToVec3(pos));
+
+        const chunk = self.getPtr(poss.chunkPos) orelse return error.ChunkNotFound;
+
+        chunk.chunk.blocks[@intCast(poss.inChunkPos.x)] //
+        [@intCast(poss.inChunkPos.y)][@intCast(poss.inChunkPos.z)] = block;
+    }
 };
 
 pub const RenderChunk = struct {
@@ -611,8 +622,8 @@ pub fn renderDistanceGen() !void {
     const chunkPos: IVec3 = getPlayerChunkPos();
     const dist2: u32 = @as(u32, @intCast(state.renderDistance)) * state.renderDistance;
 
-    for (0..(state.renderDistance + 4) * 2) |dx| {
-        for (0..(state.renderDistance + 4) * 2) |dz| {
+    for (0..(state.renderDistance + 2) * 2) |dx| {
+        for (0..(state.renderDistance + 2) * 2) |dz| {
             const toGenPos = IVec3.new(
                 @as(i64, @intCast(dx)) - state.renderDistance + chunkPos.x,
                 0,

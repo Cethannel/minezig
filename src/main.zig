@@ -98,6 +98,9 @@ const State = struct {
     chunksInFlightSet: chunksInFlightT = undefined,
 
     blocksArr: std.ArrayList(blocks.Block) = undefined,
+    blocksNameArr: std.ArrayList(u8) = undefined,
+
+    selectedBlock: c_int = 0,
 
     colors: [3]Color = .{
         .{ .r = 0xf4, .g = 0x43, .b = 0x36 },
@@ -206,10 +209,17 @@ fn init() callconv(.C) void {
     state.textureMap = std.StringHashMap(u32).init(state.allocator);
 
     state.blocksArr = std.ArrayList(blocks.Block).init(state.allocator);
+    state.blocksNameArr = std.ArrayList(u8).init(state.allocator);
 
     state.blocksArr.append(blocks.AirBlock) catch unreachable;
 
     defaultBlocks() catch unreachable;
+
+    for (state.blocksArr.items) |block| {
+        state.blocksNameArr.appendSlice(block.blockName.*) catch unreachable;
+        state.blocksNameArr.append(0) catch unreachable;
+    }
+    state.blocksNameArr.append(0) catch unreachable;
 
     const blockTextures = textures.registerBlocks(state.blocksArr.items) catch unreachable;
 
@@ -347,6 +357,9 @@ fn frame() callconv(.C) void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
+                if (state.chunkMap.getPtr(nc.pos)) |chunk| {
+                    chunk.clear_meshes();
+                }
                 state.chunkMap.put(nc.pos, nc.chunk) catch unreachable;
                 state.chunkMap.regenNeighborMeshes(nc.pos) catch unreachable;
             },
@@ -373,6 +386,19 @@ fn frame() callconv(.C) void {
         var thing: c_int = @intCast(@field(state.selector.pos, name));
         _ = ig.igDragInt(name ++ ": ", &thing);
         @field(state.selector.pos, name) = thing;
+    }
+
+    _ = ig.igCombo("Block select", &state.selectedBlock, state.blocksNameArr.items.ptr);
+
+    if (ig.igButton("Place block")) {
+        state.sendWorkerThreadQueue.enqueue(.{
+            .SetBlock = .{
+                .pos = state.selector.pos,
+                .block = .{
+                    .id = @enumFromInt(state.selectedBlock),
+                },
+            },
+        }) catch unreachable;
     }
 
     ig.igEnd();
@@ -468,6 +494,7 @@ fn cleanup() callconv(.C) void {
     }
 
     state.blocksArr.deinit();
+    state.blocksNameArr.deinit();
 
     state.selector.deinit();
 

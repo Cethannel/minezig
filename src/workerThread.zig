@@ -3,6 +3,8 @@ const root = @import("main.zig");
 const chunks = @import("chunks.zig");
 const zlm = @import("zlm");
 
+const utils = @import("utils.zig");
+
 const IVec3 = zlm.SpecializeOn(i64).Vec3;
 
 const state = &root.state;
@@ -10,6 +12,10 @@ const state = &root.state;
 pub const toWorkerThreadMessage = union(enum) {
     GetChunk: IVec3,
     SetPlayerPos: zlm.Vec3,
+    SetBlock: struct {
+        pos: IVec3,
+        block: chunks.Block,
+    },
 };
 
 pub const fromWorkerThreadMessage = union(enum) {
@@ -29,6 +35,11 @@ pub fn workerThread() void {
             switch (message) {
                 .GetChunk => |pos| getChunk(&chunkMap, pos) catch unreachable,
                 .SetPlayerPos => |pos| playerPos = pos,
+                .SetBlock => |sbData| {
+                    chunkMap.set_block(sbData.pos, sbData.block) catch {};
+                    const cpos = chunks.worldToChunkPos(utils.ivec3ToVec3(sbData.pos));
+                    getChunk(&chunkMap, cpos.chunkPos) catch unreachable;
+                },
             }
         }
     }

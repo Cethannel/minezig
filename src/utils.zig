@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const zlm = @import("zlm");
+
 pub fn mspc(T: type) type {
     const atomicsUsize = std.atomic.Value(usize);
 
@@ -117,6 +119,26 @@ pub fn optionalTypeName(comptime T: ?type) [:0]const u8 {
     } else {
         return @typeName(void);
     }
+}
+
+pub fn ivec3ToVec3(input: zlm.SpecializeOn(i64).Vec3) zlm.Vec3 {
+    var out = zlm.Vec3.zero;
+
+    inline for (std.meta.fields(zlm.Vec3)) |field| {
+        @field(out, field.name) = @floatFromInt(@field(input, field.name));
+    }
+
+    return out;
+}
+
+pub fn vec3ToIVec3(input: zlm.Vec3) zlm.SpecializeOn(i64).Vec3 {
+    var out = zlm.SpecializeOn(i64).Vec3.zero;
+
+    inline for (std.meta.fields(zlm.Vec3)) |field| {
+        @field(out, field.name) = @floatFromInt(@field(input, field.name));
+    }
+
+    return out;
 }
 
 fn otherThread(data: []const dataType, queue: *mspc(dataType)) void {
