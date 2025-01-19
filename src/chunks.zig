@@ -360,42 +360,46 @@ pub const ChunkMap = struct {
         };
     }
 
-    pub fn get(self: *@This(), pos: IVec3) ?RenderChunk {
+    pub fn get(self: *const @This(), pos: IVec3) ?RenderChunk {
         return self.map.get(pos);
     }
 
-    pub fn getPtr(self: *@This(), pos: IVec3) ?*RenderChunk {
+    pub fn getPtr(self: *const @This(), pos: IVec3) ?*RenderChunk {
         return self.map.getPtr(pos);
     }
 
-    pub fn genChunk(self: *Self, chunkPos: IVec3) !void {
-        const chunk = Chunk.gen_chunk(chunkPos);
-
+    pub fn put(self: *@This(), pos: IVec3, chunk: Chunk) !void {
         const rchunk = RenderChunk{
             .chunk = chunk,
             .solid_mesh = null,
             .transparent_mesh = null,
         };
 
-        try self.map.put(chunkPos, rchunk);
+        try self.map.put(pos, rchunk);
+    }
 
-        inline for (0..2) |ix| {
-            inline for (0..2) |iz| {
-                const x: i64 = @as(i64, @intCast(ix)) - 1;
-                const z: i64 = @as(i64, @intCast(iz)) - 1;
-                if (@abs(x) == @abs(z)) {
-                    continue;
-                }
+    pub fn genChunk(self: *Self, chunkPos: IVec3) !void {
+        const chunk = Chunk.gen_chunk(chunkPos);
 
-                const offset = IVec3.new(x, 0, z);
+        try self.put(chunkPos, chunk);
 
-                if (self.map.get(chunkPos.add(offset))) |rChunk| {
-                    if (rChunk.solid_mesh != null or rchunk.transparent_mesh != null) {
-                        try self.genMesh(chunkPos.add(offset));
-                    }
-                }
-            }
-        }
+        //inline for (0..2) |ix| {
+        //    inline for (0..2) |iz| {
+        //        const x: i64 = @as(i64, @intCast(ix)) - 1;
+        //        const z: i64 = @as(i64, @intCast(iz)) - 1;
+        //        if (@abs(x) == @abs(z)) {
+        //            continue;
+        //        }
+
+        //        const offset = IVec3.new(x, 0, z);
+
+        //        if (self.map.get(chunkPos.add(offset))) |rChunk| {
+        //            if (rChunk.solid_mesh != null or rChunk.transparent_mesh != null) {
+        //                try state.genChunkMeshQueue.enqueue(chunkPos.add(offset));
+        //            }
+        //        }
+        //    }
+        //}
     }
 
     pub fn contains(self: *const Self, pos: IVec3) bool {
@@ -490,7 +494,7 @@ pub const ChunkMap = struct {
                 const newPos = chunkPos.add(offsetVec);
                 if (self.map.getPtr(newPos)) |neibor| {
                     if (neibor.transparent_mesh != null or neibor.solid_mesh != null) {
-                        try state.genChunkMeshQueue.add(newPos);
+                        try state.genChunkMeshQueue.enqueue(newPos);
                     }
                 }
             }
@@ -577,13 +581,19 @@ fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
 
     if (state.chunkMap.get(toGenPos)) |chunk| {
         if (chunk.solid_mesh == null and chunk.transparent_mesh == null) {
-            try state.genChunkMeshQueue.add(toGenPos);
+            try state.genChunkMeshQueue.enqueue(toGenPos);
         }
 
         return;
     }
 
-    try state.genChunkQueue.add(toGenPos);
+    if (state.chunksInFlightSet.get(toGenPos) == null) {
+        try state.sendWorkerThreadQueue.enqueue(.{
+            .GetChunk = toGenPos,
+        });
+
+        try state.chunksInFlightSet.put(toGenPos, .{});
+    }
 }
 
 fn outRangeDel(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {

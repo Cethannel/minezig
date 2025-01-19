@@ -8,6 +8,9 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
 
+const util = @import("utils.zig");
+const workerThread = @import("workerThread.zig");
+
 const config = @import("config");
 
 const c = if (config.controllerSupport) @cImport(
@@ -87,8 +90,12 @@ const State = struct {
 
     sensitivity: f32 = 0.1,
 
-    genChunkQueue: genChunkQueueT = undefined,
     genChunkMeshQueue: genChunkQueueT = undefined,
+
+    sendWorkerThreadQueue: util.mspc(workerThread.toWorkerThreadMessage) = undefined,
+    recvWorkerThreadQueue: util.mspc(workerThread.fromWorkerThreadMessage) = undefined,
+
+    chunksInFlightSet: chunksInFlightT = undefined,
 
     blocksArr: std.ArrayList(blocks.Block) = undefined,
 
@@ -108,6 +115,10 @@ const State = struct {
 
     selector: selector.Selector = undefined,
 
+    close: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    workerThreadHandle: std.Thread = undefined,
+
     const GPA = std.heap.GeneralPurposeAllocator(.{
         .enable_memory_limit = true,
     });
@@ -116,7 +127,8 @@ const State = struct {
         playerPos: Vec3,
     };
 
-    pub const genChunkQueueT = std.PriorityQueue(IVec3, genChunkContext, compChunks);
+    pub const chunksInFlightT = std.AutoHashMap(IVec3, struct {});
+    pub const genChunkQueueT = util.mspc(IVec3);
 
     fn compChunks(ctx: genChunkContext, a: IVec3, b: IVec3) std.math.Order {
         _ = ctx;
@@ -223,23 +235,16 @@ fn init() callconv(.C) void {
 
     state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
-    state.genChunkQueue = State.genChunkQueueT.init(state.allocator, .{
-        .playerPos = state.cameraPos,
-    });
+    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 1028 * 4) catch unreachable;
 
-    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, .{
-        .playerPos = state.cameraPos,
-    });
+    state.sendWorkerThreadQueue = util.mspc(workerThread.toWorkerThreadMessage) //
+        .init(state.allocator, 1024) catch unreachable;
+    state.recvWorkerThreadQueue = util.mspc(workerThread.fromWorkerThreadMessage) //
+        .init(state.allocator, 1024) catch unreachable;
+
+    state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
 
     state.chunkMap = chunks.ChunkMap.init(state.allocator);
-
-    for (0..4) |x| {
-        for (0..4) |z| {
-            const sx: i64 = @intCast(x);
-            const sz: i64 = @intCast(z);
-            state.genChunkQueue.add(IVec3.new(sx - 2, 0, sz - 2)) catch unreachable;
-        }
-    }
 
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
@@ -286,6 +291,12 @@ fn init() callconv(.C) void {
     state.text_pass_action.colors[0] = .{
         .load_action = .LOAD,
     };
+
+    state.workerThreadHandle = std.Thread.spawn(
+        .{},
+        workerThread.workerThread,
+        .{},
+    ) catch unreachable;
 }
 
 fn frame() callconv(.C) void {
@@ -333,12 +344,16 @@ fn frame() callconv(.C) void {
 
     sdtx.print("Dt is: {d:.2}\n", .{1.0 / sapp.frameDuration()});
 
-    while (state.genChunkQueue.removeOrNull()) |chunkPos| {
-        state.chunkMap.genChunk(chunkPos) catch unreachable;
-        state.chunkMap.regenNeighborMeshes(chunkPos) catch unreachable;
+    while (state.recvWorkerThreadQueue.dequeue()) |msg| {
+        switch (msg) {
+            .NewChunk => |nc| {
+                state.chunkMap.put(nc.pos, nc.chunk) catch unreachable;
+                state.chunkMap.regenNeighborMeshes(nc.pos) catch unreachable;
+            },
+        }
     }
 
-    while (state.genChunkMeshQueue.removeOrNull()) |chunkPos| {
+    while (state.genChunkMeshQueue.dequeue()) |chunkPos| {
         state.chunkMap.genMesh(chunkPos) catch unreachable;
     }
 
@@ -436,6 +451,9 @@ fn frame() callconv(.C) void {
 }
 
 fn cleanup() callconv(.C) void {
+    state.close.store(true, .release);
+    state.workerThreadHandle.join();
+
     var tMapIter = state.textureMap.keyIterator();
 
     while (tMapIter.next()) |key| {
@@ -453,7 +471,9 @@ fn cleanup() callconv(.C) void {
 
     state.selector.deinit();
 
-    state.genChunkQueue.deinit();
+    state.sendWorkerThreadQueue.deinit();
+    state.recvWorkerThreadQueue.deinit();
+    state.chunksInFlightSet.deinit();
     state.genChunkMeshQueue.deinit();
     state.chunkMap.deinit();
     state.allocator.free(state.atlas);
@@ -713,6 +733,7 @@ pub fn ivec3ToVec3(input: IVec3) Vec3 {
 
 test {
     _ = @import("blocks.zig");
+    _ = @import("utils.zig");
 
     @import("std").testing.refAllDecls(@This());
 }
