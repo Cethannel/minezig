@@ -1,6 +1,8 @@
 const std = @import("std");
 pub const shd = @import("shaders/selector.glsl.zig");
 
+const util = @import("utils.zig");
+
 const sokol = @import("sokol");
 const sapp = sokol.app;
 const simgui = sokol.imgui;
@@ -115,6 +117,7 @@ pub const Selector = struct {
                                 @floatFromInt(y),
                                 @floatFromInt(z),
                             );
+                            std.log.info("Checking block: {}", .{blockPos});
 
                             const blockMaxPos = blockPos.add(zlm.Vec3.one);
 
@@ -122,9 +125,11 @@ pub const Selector = struct {
 
                             const out = intersectAABB(fInChunkPos, state.cameraFront, blockPos, blockMaxPos);
 
-                            if (out.x < out.y) {
+                            if (out) {
                                 std.log.info("Found intersection: {any}", .{blockPos});
-                                self.pos = iVecFromVec3(blockPos);
+                                if (state.cameraPos.distance2(util.ivec3ToVec3(self.pos)) > state.cameraPos.distance2(blockPos)) {
+                                    self.pos = iVecFromVec3(blockPos);
+                                }
                             }
                         }
                     }
@@ -205,14 +210,33 @@ const baseVertices = [_]Vertex{
     },
 };
 
-fn intersectAABB(rayOrigin: zlm.Vec3, rayDir: zlm.Vec3, boxMin: zlm.Vec3, boxMax: zlm.Vec3) zlm.Vec2 {
-    const tMin = boxMin.sub(rayOrigin).div(rayDir);
-    const tMax = boxMax.sub(rayOrigin).div(rayDir);
-    const t1 = tMin.componentMin(tMax);
-    const t2 = tMin.componentMin(tMax);
-    const tNear = @max(@max(t1.x, t1.y), t1.z);
-    const tFar = @min(@min(t2.x, t2.y), t2.z);
-    return zlm.vec2(tNear, tFar);
+fn intersectAABB(rayOrigin: zlm.Vec3, rayDir: zlm.Vec3, lb: zlm.Vec3, rt: zlm.Vec3) bool {
+    var dirfrac = zlm.Vec3.zero;
+
+    inline for (std.meta.fields(zlm.Vec3)) |field| {
+        @field(dirfrac, field.name) = 1.0 / @field(rayDir, field.name);
+    }
+
+    const t1 = (lb.x - rayOrigin.x) * dirfrac.x;
+    const t2 = (rt.x - rayOrigin.x) * dirfrac.x;
+    const t3 = (lb.y - rayOrigin.y) * dirfrac.y;
+    const t4 = (rt.y - rayOrigin.y) * dirfrac.y;
+    const t5 = (lb.z - rayOrigin.z) * dirfrac.z;
+    const t6 = (rt.z - rayOrigin.z) * dirfrac.z;
+
+    const tmin = @max(@max(@min(t1, t2), @min(t3, t4)), @min(t5, t6));
+    const tmax = @min(@min(@max(t1, t2), @max(t3, t4)), @max(t5, t6));
+
+    if (tmax < 0) {
+        return false;
+    }
+
+    // if tmin > tmax, ray doesn't intersect AABB
+    if (tmin > tmax) {
+        return false;
+    }
+
+    return true;
 }
 
 pub fn vecToArr(input: zlm.Vec3) [3]f64 {
