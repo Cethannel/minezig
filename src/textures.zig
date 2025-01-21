@@ -57,7 +57,7 @@ pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
     defer out.deinit();
 
     for (blocksToRegister, 0..) |block, i| {
-        std.log.info("Block[{}]: `{s}`", .{ i, block.blockName });
+        std.log.info("Block[{}]: `{s}`", .{ i, block.blockName.* });
         if (i == 0) {
             continue;
         }

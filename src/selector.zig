@@ -4,12 +4,8 @@ pub const shd = @import("shaders/selector.glsl.zig");
 const util = @import("utils.zig");
 
 const sokol = @import("sokol");
-const sapp = sokol.app;
-const simgui = sokol.imgui;
 const sg = sokol.gfx;
 const sglue = sokol.glue;
-const slog = sokol.log;
-const sdtx = sokol.debugtext;
 
 const root = @import("main.zig");
 const state = &root.state;
@@ -39,6 +35,12 @@ pub const Selector = struct {
 
     vertexBuffer: sg.Buffer = .{},
     indexBuffer: sg.Buffer = .{},
+
+    t: f32 = std.math.floatMax(f32),
+    last_t: f32 = std.math.floatMax(f32),
+
+    last_pos: zlm.Vec3 = zlm.Vec3.zero,
+    last_look: zlm.Vec3 = zlm.Vec3.zero,
 
     const Self = @This();
 
@@ -86,6 +88,26 @@ pub const Selector = struct {
         return out;
     }
 
+    pub fn render(self: *Self) void {
+        sg.beginPass(.{ .action = self.pass_action, .swapchain = sglue.swapchain() });
+
+        self.bind.vertex_buffers[0] = self.vertexBuffer;
+        self.bind.index_buffer = self.indexBuffer;
+
+        const vs_params = shd.VsParams{ .mvp = root.computeVsParams(
+            @floatFromInt(self.pos.x),
+            @floatFromInt(self.pos.y),
+            @floatFromInt(self.pos.z),
+        ) };
+
+        sg.applyPipeline(self.pip);
+        sg.applyBindings(self.bind);
+
+        sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+        sg.draw(0, @intCast(self.indices.items.len), 1);
+        sg.endPass();
+    }
+
     pub fn deinit(self: *@This()) void {
         sg.destroyPipeline(self.pip);
 
@@ -105,30 +127,45 @@ pub const Selector = struct {
     }
 
     pub fn calcPos(self: *Self) void {
-        const pos = chunks.worldToChunkPos(state.cameraPos);
+        if (!self.last_pos.eql(state.cameraPos) or !self.last_look.eql(state.cameraFront)) {
+            self.t = std.math.floatMax(f32);
+            self.last_t = std.math.floatMax(f32);
+            self.last_pos = state.cameraPos;
+            self.last_look = state.cameraPos;
+        }
 
-        if (state.chunkMap.get(pos.chunkPos)) |chunk| {
-            for (chunk.chunk.blocks, 0..) |slice, x| {
-                for (slice, 0..) |column, y| {
-                    for (column, 0..) |block, z| {
-                        if (block.id != .Air) {
-                            const blockPos = zlm.vec3(
-                                @floatFromInt(x),
-                                @floatFromInt(y),
-                                @floatFromInt(z),
-                            );
-                            std.log.info("Checking block: {}", .{blockPos});
+        var dirfrac = zlm.Vec3.zero;
 
-                            const blockMaxPos = blockPos.add(zlm.Vec3.one);
+        inline for (std.meta.fields(zlm.Vec3)) |field| {
+            @field(dirfrac, field.name) = 1.0 / @field(state.cameraFront, field.name);
+        }
 
-                            const fInChunkPos = vecFromIVec3(pos.inChunkPos);
+        inline for ([3]comptime_int{ -1, 0, 1 }) |chunkX| {
+            inline for ([3]comptime_int{ -1, 0, 1 }) |chunkZ| {
+                const pos = chunks.worldToChunkPos(state.cameraPos.add(zlm.Vec3.new(16 * chunkX, 0, 16 * chunkZ)));
+                if (state.chunkMap.get(pos.chunkPos)) |chunk| {
+                    for (chunk.chunk.blocks, 0..) |slice, x| {
+                        for (slice, 0..) |column, y| {
+                            for (column, 0..) |block, z| {
+                                if (block.id != .Air) {
+                                    const blockPos = zlm.vec3(
+                                        @floatFromInt(x),
+                                        @floatFromInt(y),
+                                        @floatFromInt(z),
+                                    ).add(chunks.chunkToWorldPos(pos.chunkPos));
 
-                            const out = intersectAABB(fInChunkPos, state.cameraFront, blockPos, blockMaxPos);
+                                    // FIXME: I don't think this works for negative chunks
 
-                            if (out) {
-                                std.log.info("Found intersection: {any}", .{blockPos});
-                                if (state.cameraPos.distance2(util.ivec3ToVec3(self.pos)) > state.cameraPos.distance2(blockPos)) {
-                                    self.pos = iVecFromVec3(blockPos);
+                                    const blockMaxPos = blockPos.add(zlm.Vec3.one);
+
+                                    const intersects = self.intersectAABB(state.cameraPos, dirfrac, blockPos, blockMaxPos);
+
+                                    if (intersects) {
+                                        if (self.t < self.last_t) {
+                                            self.last_t = self.t;
+                                            self.pos = iVecFromVec3(blockPos);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -136,6 +173,32 @@ pub const Selector = struct {
                 }
             }
         }
+    }
+
+    fn intersectAABB(self: *Self, rayOrigin: zlm.Vec3, dirfrac: zlm.Vec3, lb: zlm.Vec3, rt: zlm.Vec3) bool {
+        const t1 = (lb.x - rayOrigin.x) * dirfrac.x;
+        const t2 = (rt.x - rayOrigin.x) * dirfrac.x;
+        const t3 = (lb.y - rayOrigin.y) * dirfrac.y;
+        const t4 = (rt.y - rayOrigin.y) * dirfrac.y;
+        const t5 = (lb.z - rayOrigin.z) * dirfrac.z;
+        const t6 = (rt.z - rayOrigin.z) * dirfrac.z;
+
+        const tmin = @max(@max(@min(t1, t2), @min(t3, t4)), @min(t5, t6));
+        const tmax = @min(@min(@max(t1, t2), @max(t3, t4)), @max(t5, t6));
+
+        if (tmax < 0) {
+            self.t = tmax;
+            return false;
+        }
+
+        // if tmin > tmax, ray doesn't intersect AABB
+        if (tmin > tmax) {
+            self.t = tmax;
+            return false;
+        }
+
+        self.t = tmin;
+        return true;
     }
 };
 

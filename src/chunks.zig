@@ -643,7 +643,7 @@ fn getNumberTextures() usize {
 pub fn chunkToWorldPos(chunkPos: IVec3) zlm.Vec3 {
     return .{
         .x = @as(f32, @floatFromInt(chunkPos.x)) * 16.0,
-        .y = @as(f32, @floatFromInt(chunkPos.y)) * 16.0,
+        .y = @as(f32, @floatFromInt(chunkPos.y)),
         .z = @as(f32, @floatFromInt(chunkPos.z)) * 16.0,
     };
 }

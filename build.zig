@@ -166,6 +166,7 @@ fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
         "triangle.glsl",
         "cube.glsl",
         "selector.glsl",
+        "crosshair.glsl",
     };
 
     const shdc = "sokol-shdc";

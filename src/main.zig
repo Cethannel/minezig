@@ -46,6 +46,7 @@ const window_w = 1920;
 const window_h = 1080;
 
 const selector = @import("selector.zig");
+const crosshair = @import("crosshair.zig");
 
 const Color = struct { r: u8, g: u8, b: u8 };
 
@@ -117,6 +118,7 @@ const State = struct {
     seed: i32 = 1337,
 
     selector: selector.Selector = undefined,
+    crosshair: crosshair.Crosshair = .{},
 
     close: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
@@ -205,6 +207,7 @@ fn init() callconv(.C) void {
     });
 
     state.selector = selector.Selector.init(state.allocator) catch unreachable;
+    state.crosshair = crosshair.Crosshair.init();
 
     state.textureMap = std.StringHashMap(u32).init(state.allocator);
 
@@ -430,23 +433,9 @@ fn frame() callconv(.C) void {
         }
     }
     sg.endPass();
-    sg.beginPass(.{ .action = state.selector.pass_action, .swapchain = sglue.swapchain() });
 
-    state.selector.bind.vertex_buffers[0] = state.selector.vertexBuffer;
-    state.selector.bind.index_buffer = state.selector.indexBuffer;
-
-    const vs_params = selector.shd.VsParams{ .mvp = computeVsParams(
-        @floatFromInt(state.selector.pos.x),
-        @floatFromInt(state.selector.pos.y),
-        @floatFromInt(state.selector.pos.z),
-    ) };
-
-    sg.applyPipeline(state.selector.pip);
-    sg.applyBindings(state.selector.bind);
-
-    sg.applyUniforms(selector.shd.UB_vs_params, sg.asRange(&vs_params));
-    sg.draw(0, @intCast(state.selector.indices.items.len), 1);
-    sg.endPass();
+    state.selector.render();
+    state.crosshair.render();
 
     sdtx.print("Second\n", .{});
 
@@ -568,6 +557,35 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
                     if (event.type == .KEY_DOWN) {
                         sapp.lockMouse(!sapp.mouseLocked());
                     }
+                },
+                else => {},
+            }
+        },
+        .MOUSE_DOWN => {
+            switch (event.mouse_button) {
+                .LEFT => {
+                    state.sendWorkerThreadQueue.enqueue(.{
+                        .SetBlock = .{
+                            .pos = state.selector.pos,
+                            .block = .{
+                                .id = .Air,
+                            },
+                        },
+                    }) catch {
+                        std.log.err("Failed to set block to air", .{});
+                    };
+                },
+                .RIGHT => {
+                    state.sendWorkerThreadQueue.enqueue(.{
+                        .SetBlock = .{
+                            .pos = state.selector.pos,
+                            .block = .{
+                                .id = @enumFromInt(state.selectedBlock),
+                            },
+                        },
+                    }) catch {
+                        std.log.err("Failed to set block ", .{});
+                    };
                 },
                 else => {},
             }
