@@ -36,7 +36,10 @@ pub fn workerThread() void {
                 .GetChunk => |pos| getChunk(&chunkMap, pos) catch unreachable,
                 .SetPlayerPos => |pos| playerPos = pos,
                 .SetBlock => |sbData| {
-                    chunkMap.set_block(sbData.pos, sbData.block) catch {};
+                    std.log.info("Setting block at: {}", .{sbData.pos});
+                    chunkMap.set_block(sbData.pos, sbData.block) catch {
+                        std.log.err("Failed to set block at: {}", .{sbData.pos});
+                    };
                     const cpos = chunks.worldToChunkPos(utils.ivec3ToVec3(sbData.pos));
                     getChunk(&chunkMap, cpos.chunkPos) catch unreachable;
                 },

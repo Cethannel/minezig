@@ -42,6 +42,10 @@ pub const Block = struct {
     pub const Air = .{
         .id = .Air,
     };
+
+    pub fn eql(self: *const @This(), other: *const @This()) bool {
+        return self.id == other.id;
+    }
 };
 
 const baseVertices = [_]root.Vertex{
@@ -94,6 +98,26 @@ pub const Chunk = struct {
         indices: std.ArrayList(u32),
     };
 
+    pub fn eql(self: *const @This(), other: *const @This()) bool {
+        if (self == other) {
+            return true;
+        }
+
+        for (0..chunkWidth) |x| {
+            for (0..chunkHeight) |y| {
+                for (0..chunkWidth) |z| {
+                    if (!self.blocks[x][y][z].eql(
+                        &other.blocks[x][y][z],
+                    )) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return true;
+    }
+
     pub fn gen_solid_chunk() @This() {
         const idThing: u32 = 1;
         const blocks = .{.{.{Block{ .id = @enumFromInt(idThing) }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
@@ -144,6 +168,10 @@ pub const Chunk = struct {
 
     pub fn gen_chunk(chunkPos: IVec3) @This() {
         var out: @This() = undefined;
+
+        if (1 == 1) {
+            return gen_half_solid_chunk();
+        }
 
         const noise = fastnoise.Noise(f32){
             .seed = state.seed,
@@ -506,6 +534,9 @@ pub const ChunkMap = struct {
     pub fn set_block(self: *@This(), pos: IVec3, block: Block) !void {
         const poss = worldToChunkPos(utils.ivec3ToVec3(pos));
 
+        std.log.info("Setting block in chunk: {}", .{poss.chunkPos});
+        std.log.info("Setting block in chunk pos: {}", .{poss.inChunkPos});
+
         const chunk = self.getPtr(poss.chunkPos) orelse return error.ChunkNotFound;
 
         chunk.chunk.blocks[@intCast(poss.inChunkPos.x)] //
@@ -681,7 +712,12 @@ fn convert_single_coord(input: i64) i64 {
     if (@mod(input, chunkHeight) == 0) {
         return 0;
     } else {
-        return (if (input < 0) @as(i64, 16) else @as(i64, 0)) + @mod(input, chunkWidth);
+        const out = (if (input < 0) @as(i64, 16) else @as(i64, 0)) + @mod(input, chunkWidth);
+
+        utils.assert(out < 16, null);
+        utils.assert(out >= 0, null);
+
+        return out;
     }
 }
 

@@ -360,11 +360,16 @@ fn frame() callconv(.C) void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
+                std.log.info("Got new chunk: {}", .{nc.pos});
                 if (state.chunkMap.getPtr(nc.pos)) |chunk| {
+                    if (chunk.chunk.eql(&nc.chunk)) {
+                        std.log.info("Got same chunk", .{});
+                    }
                     chunk.clear_meshes();
                 }
                 state.chunkMap.put(nc.pos, nc.chunk) catch unreachable;
                 state.chunkMap.regenNeighborMeshes(nc.pos) catch unreachable;
+                state.genChunkMeshQueue.enqueue(nc.pos) catch unreachable;
             },
         }
     }
@@ -406,31 +411,16 @@ fn frame() callconv(.C) void {
 
     ig.igEnd();
 
-    inline for (chunks.mesh_variants) |variant| {
-        var chunkIter = state.chunkMap.map.iterator();
+    sg.endPass();
+    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
+    sg.applyPipeline(state.pip);
+    var chunkIter = state.chunkMap.map.iterator();
 
-        while (chunkIter.next()) |entry| {
-            const pos = entry.key_ptr;
-            const chunk = entry.value_ptr;
-            //chunk.render(pos);
-
-            const cMesh: ?chunks.Mesh = @field(chunk, variant ++ "_mesh");
-            if (cMesh) |mesh| {
-                state.bind.vertex_buffers[0] = mesh.vertexBuffer;
-                state.bind.index_buffer = mesh.indexBuffer;
-
-                sg.applyBindings(state.bind);
-                const vs_params = shd.VsParams{
-                    .mvp = computeVsParams(
-                        @floatFromInt(pos.x * 16),
-                        @floatFromInt(pos.y * 16),
-                        @floatFromInt(pos.z * 16),
-                    ),
-                };
-                sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-                sg.draw(0, @intCast(mesh.indices.items.len), 1);
-            }
-        }
+    while (chunkIter.next()) |entry| {
+        const pos = entry.key_ptr;
+        const chunk = entry.value_ptr;
+        //chunk.render(pos);
+        chunk.render(pos);
     }
     sg.endPass();
 
