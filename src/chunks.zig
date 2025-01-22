@@ -169,10 +169,6 @@ pub const Chunk = struct {
     pub fn gen_chunk(chunkPos: IVec3) @This() {
         var out: @This() = undefined;
 
-        if (1 == 1) {
-            return gen_half_solid_chunk();
-        }
-
         const noise = fastnoise.Noise(f32){
             .seed = state.seed,
             .noise_type = .perlin,
@@ -360,6 +356,10 @@ pub const Chunk = struct {
         }
 
         return out;
+    }
+
+    pub fn regen_sides(self: *@This()) void {
+        self.sides = self.gen_sides();
     }
 };
 
@@ -712,10 +712,17 @@ fn convert_single_coord(input: i64) i64 {
     if (@mod(input, chunkHeight) == 0) {
         return 0;
     } else {
-        const out = (if (input < 0) @as(i64, 16) else @as(i64, 0)) + @mod(input, chunkWidth);
+        const out = if (@rem(input, chunkWidth) == 0) blk: {
+            break :blk 0;
+        } else blk: {
+            break :blk (if (input < 0) @as(i64, 16) else @as(i64, 0)) + @rem(input, chunkWidth);
+        };
 
-        utils.assert(out < 16, null);
-        utils.assert(out >= 0, null);
+        var buf: [128:0]u8 = undefined;
+        var msg = std.fmt.bufPrint(&buf, "expected < 16 got: {}", .{out}) catch unreachable;
+        utils.assert(out < 16, msg);
+        msg = std.fmt.bufPrint(&buf, "expected >= 0 got: {}", .{out}) catch unreachable;
+        utils.assert(out >= 0, msg);
 
         return out;
     }

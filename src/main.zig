@@ -360,7 +360,6 @@ fn frame() callconv(.C) void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
-                std.log.info("Got new chunk: {}", .{nc.pos});
                 if (state.chunkMap.getPtr(nc.pos)) |chunk| {
                     if (chunk.chunk.eql(&nc.chunk)) {
                         std.log.info("Got same chunk", .{});

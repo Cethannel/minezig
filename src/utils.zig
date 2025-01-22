@@ -74,8 +74,8 @@ pub fn mspc(T: type) type {
     };
 }
 
-pub inline fn assert(condition: bool, message: ?[]const u8) void {
-    if (condition) {
+pub fn assert(condition: bool, message: ?[]const u8) void {
+    if (!condition) {
         const src = @src();
         std.log.err("Failed assert: {s} at {s}:[{}]", .{
             src.fn_name,
