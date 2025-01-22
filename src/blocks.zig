@@ -6,24 +6,35 @@ const root = @import("main.zig");
 
 const utils = @import("utils.zig");
 
+const chunks = @import("chunks.zig");
+
 const state = &root.state;
 
+pub const BlockUpdateParams = extern struct {
+    chunksMap: *const chunks.ChunkMap,
+};
+
 pub const Block = extern struct {
-    const getTextureNames = *const fn (
+    pub const getTextureNames = *const fn (
         self: *const anyopaque,
         allocator: *const std.mem.Allocator,
     ) callconv(.C) ?*[][]const u8;
 
-    const deinitFn = *const fn (
+    pub const deinitFn = *const fn (
         self: *anyopaque,
     ) callconv(.C) void;
 
-    const genVerticesSidesFn = *const fn (
+    pub const genVerticesSidesFn = *const fn (
         self: *const anyopaque,
         side: usize,
         pos: zlm.Vec3,
         out: *[4]root.Vertex,
     ) callconv(.C) bool;
+
+    pub const blockUpdate = *const fn (
+        self: *anyopaque,
+        params: *const BlockUpdateParams,
+    ) callconv(.C) void;
 
     inner: *anyopaque,
     allocator: *const std.mem.Allocator,
@@ -34,6 +45,7 @@ pub const Block = extern struct {
     free_inner: *const fn (allocator: *const std.mem.Allocator, inner: *anyopaque) callconv(.C) void,
     inner_get_textures_names: getTextureNames,
     inner_gen_vertices_sides: genVerticesSidesFn,
+    inner_block_update: ?blockUpdate,
     inner_deinit: deinitFn,
 
     pub fn get_textures_names(self: *const @This(), allocator: std.mem.Allocator) ![][]const u8 {
@@ -54,6 +66,12 @@ pub const Block = extern struct {
             return out;
         } else {
             return error.GenVerticesSides;
+        }
+    }
+
+    pub inline fn block_update(self: *@This(), params: *const BlockUpdateParams) void {
+        if (self.inner_block_update) |ibu| {
+            ibu(self.inner, params);
         }
     }
 
@@ -161,48 +179,108 @@ pub fn toBlock(inner: anytype, allocator: std.mem.Allocator, name: []const u8) !
 
         const other_field_name = field.name["inner_".len..];
 
-        if (!@hasDecl(iType, other_field_name)) {
-            @compileError(std.fmt.comptimePrint("{} does not have required function `{s}`: {}", .{
-                iType,
-                other_field_name,
-                field.type,
-            }));
-        }
-
-        const otherFieldType = @TypeOf(@field(iType, other_field_name));
-        const otherFieldTypeInfo = @typeInfo(otherFieldType);
-
         const genFieldTypeInfo = @typeInfo(field.type);
 
-        switch (genFieldTypeInfo) {
-            .pointer => |ptrInfo| {
-                const childTypeInfo: std.builtin.Type = @typeInfo(ptrInfo.child);
-                switch (childTypeInfo) {
-                    .@"fn" => |fnInfo| {
-                        if (otherFieldTypeInfo != .@"fn") {
-                            @compileError("FixME");
-                        }
-                        const fnInfoActual = @as(std.builtin.Type.Fn, fnInfo);
-                        const iFnInfoActual = @as(std.builtin.Type.Fn, otherFieldTypeInfo.@"fn");
+        switch (comptime checkType(genFieldTypeInfo, other_field_name, iType, field)) {
+            .Default => {
+                if (!@hasDecl(iType, other_field_name)) {
+                    @compileError(std.fmt.comptimePrint("{} does not have required function `{s}`: {}", .{
+                        iType,
+                        other_field_name,
+                        field.type,
+                    }));
+                }
 
-                        if (fnInfoActual.calling_convention != iFnInfoActual.calling_convention) {
-                            @compileError(std.fmt.comptimePrint(
-                                "For function: {s}.{s}\n" ++ //
-                                    "Expected calling convention: `{s}` but" ++ //
-                                    " found convention: `{s}`",
-                                .{
-                                    @typeName(iType),
-                                    other_field_name,
-                                    @tagName(fnInfoActual.calling_convention),
-                                    @tagName(iFnInfoActual.calling_convention),
-                                },
-                            ));
+                @field(out, field.name) = @ptrCast(&@field(iType, other_field_name));
+            },
+            .Continue => continue,
+            .Null => {
+                @field(out, field.name) = null;
+            },
+        }
+    }
+
+    return out;
+}
+
+const typeRes = enum {
+    Default,
+    Continue,
+    Null,
+};
+
+fn checkType(
+    genFieldTypeInfo: std.builtin.Type,
+    other_field_name: [:0]const u8,
+    iType: type,
+    field: std.builtin.Type.StructField,
+) typeRes {
+    switch (genFieldTypeInfo) {
+        .optional => |opt| {
+            if (@hasDecl(iType, other_field_name)) {
+                return checkType(@typeInfo(opt.child), other_field_name, iType, field);
+            } else {
+                return .Null;
+            }
+        },
+        .pointer => |ptrInfo| {
+            const childTypeInfo: std.builtin.Type = @typeInfo(ptrInfo.child);
+            switch (childTypeInfo) {
+                .@"fn" => |fnInfo| {
+                    const otherFieldType = @TypeOf(@field(iType, other_field_name));
+                    const otherFieldTypeInfo = @typeInfo(otherFieldType);
+                    if (otherFieldTypeInfo != .@"fn") {
+                        @compileError("FixME");
+                    }
+                    const fnInfoActual = @as(std.builtin.Type.Fn, fnInfo);
+                    const iFnInfoActual = @as(std.builtin.Type.Fn, otherFieldTypeInfo.@"fn");
+
+                    if (fnInfoActual.calling_convention != iFnInfoActual.calling_convention) {
+                        @compileError(std.fmt.comptimePrint(
+                            "For function: {s}.{s}\n" ++ //
+                                "Expected calling convention: `{s}` but" ++ //
+                                " found convention: `{s}`",
+                            .{
+                                @typeName(iType),
+                                other_field_name,
+                                @tagName(fnInfoActual.calling_convention),
+                                @tagName(iFnInfoActual.calling_convention),
+                            },
+                        ));
+                    }
+
+                    if (fnInfoActual.return_type != iFnInfoActual.return_type) {
+                        @compileError(std.fmt.comptimePrint(
+                            \\ For function: {s}.{s}
+                            \\ Expected return type to be:
+                            \\ {s}
+                            \\ but found type:
+                            \\ {s}
+                        ,
+                            .{
+                                @typeName(iType),
+                                other_field_name,
+                                utils.optionalTypeName(fnInfoActual.return_type),
+                                utils.optionalTypeName(iFnInfoActual.return_type),
+                            },
+                        ));
+                    }
+
+                    inline for (iFnInfoActual.params, 0..) |iParam, i| {
+                        const param = fnInfoActual.params[i];
+                        const paramTInfo: std.builtin.Type = @typeInfo(param.type.?);
+                        const iParamTInfo: std.builtin.Type = @typeInfo(iParam.type.?);
+
+                        if (paramTInfo == .pointer and iParamTInfo == .pointer) {
+                            if (iParamTInfo.pointer.child == iType and paramTInfo.pointer.child == anyopaque) {
+                                continue;
+                            }
                         }
 
-                        if (fnInfoActual.return_type != iFnInfoActual.return_type) {
+                        if (param.type != iParam.type) {
                             @compileError(std.fmt.comptimePrint(
                                 \\ For function: {s}.{s}
-                                \\ Expected return type to be:
+                                \\ Expected param[{}] to be of type:
                                 \\ {s}
                                 \\ but found type:
                                 \\ {s}
@@ -210,52 +288,21 @@ pub fn toBlock(inner: anytype, allocator: std.mem.Allocator, name: []const u8) !
                                 .{
                                     @typeName(iType),
                                     other_field_name,
-                                    utils.optionalTypeName(fnInfoActual.return_type),
-                                    utils.optionalTypeName(iFnInfoActual.return_type),
+                                    i,
+                                    @typeName(param.type.?),
+                                    @typeName(iParam.type.?),
                                 },
                             ));
                         }
-
-                        inline for (iFnInfoActual.params, 0..) |iParam, i| {
-                            const param = fnInfoActual.params[i];
-                            const paramTInfo: std.builtin.Type = @typeInfo(param.type.?);
-                            const iParamTInfo: std.builtin.Type = @typeInfo(iParam.type.?);
-
-                            if (paramTInfo == .pointer and iParamTInfo == .pointer) {
-                                if (iParamTInfo.pointer.child == iType and paramTInfo.pointer.child == anyopaque) {
-                                    continue;
-                                }
-                            }
-
-                            if (param.type != iParam.type) {
-                                @compileError(std.fmt.comptimePrint(
-                                    \\ For function: {s}.{s}
-                                    \\ Expected param[{}] to be of type:
-                                    \\ {s}
-                                    \\ but found type:
-                                    \\ {s}
-                                ,
-                                    .{
-                                        @typeName(iType),
-                                        other_field_name,
-                                        i,
-                                        @typeName(param.type.?),
-                                        @typeName(iParam.type.?),
-                                    },
-                                ));
-                            }
-                        }
-                    },
-                    else => {},
-                }
-            },
-            else => {},
-        }
-
-        @field(out, field.name) = @ptrCast(&@field(iType, other_field_name));
+                    }
+                },
+                else => {},
+            }
+        },
+        else => {},
     }
 
-    return out;
+    return .Default;
 }
 
 pub const Cube = struct {
@@ -699,6 +746,7 @@ pub const AirBlock = Block{
     .inner_deinit = undefined,
     .inner_get_textures_names = @ptrCast(&Air.get_textures_names),
     .inner_gen_vertices_sides = @ptrCast(&Air.gen_vertices_sides),
+    .inner_block_update = null,
 };
 
 pub const Fluid = struct {

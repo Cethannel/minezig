@@ -30,7 +30,10 @@ pub fn workerThread() void {
     var playerPos: ?zlm.Vec3 = null;
     defer chunkMap.deinit();
 
+    const frameTime = std.time.ns_per_s / 20;
+
     while (!state.close.load(.acquire)) {
+        const start = std.time.nanoTimestamp();
         while (state.sendWorkerThreadQueue.dequeue()) |message| {
             switch (message) {
                 .GetChunk => |pos| getChunk(&chunkMap, pos) catch unreachable,
@@ -45,6 +48,12 @@ pub fn workerThread() void {
                     getChunk(&chunkMap, cpos.chunkPos) catch unreachable;
                 },
             }
+        }
+        const now = std.time.nanoTimestamp();
+        const took = (now - start);
+        const diff = frameTime - took;
+        if (diff > 0) {
+            std.Thread.sleep(@intCast(diff));
         }
     }
 }
