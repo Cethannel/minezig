@@ -11,7 +11,18 @@ const chunks = @import("chunks.zig");
 const state = &root.state;
 
 pub const BlockUpdateParams = extern struct {
+    pub const setBlockCallbackT = *const fn (
+        pos: *const utils.IVec3,
+        block: *const chunks.Block,
+    ) callconv(.C) void;
+    pub const blockUpdateCallbackT = *const fn (
+        pos: *const utils.IVec3,
+    ) callconv(.C) void;
+
     chunksMap: *const chunks.ChunkMap,
+    pos: *const utils.IVec3,
+    setblockCallback: setBlockCallbackT,
+    blockUpdateCallback: blockUpdateCallbackT,
 };
 
 pub const Block = extern struct {
@@ -32,7 +43,7 @@ pub const Block = extern struct {
     ) callconv(.C) bool;
 
     pub const blockUpdate = *const fn (
-        self: *anyopaque,
+        self: *const anyopaque,
         params: *const BlockUpdateParams,
     ) callconv(.C) void;
 
@@ -69,7 +80,7 @@ pub const Block = extern struct {
         }
     }
 
-    pub inline fn block_update(self: *@This(), params: *const BlockUpdateParams) void {
+    pub inline fn block_update(self: *const @This(), params: *const BlockUpdateParams) void {
         if (self.inner_block_update) |ibu| {
             ibu(self.inner, params);
         }
@@ -856,22 +867,22 @@ pub const Fluid = struct {
     }
 };
 
-pub fn getBlockId(blockName: []const u8) ?u32 {
+pub fn getBlockId(blockName: []const u8) ?chunks.BlockId {
     for (state.blocksArr.items, 0..) |name, i| {
         if (std.mem.eql(u8, name.blockName.*, blockName)) {
-            return @intCast(i);
+            return @enumFromInt(i);
         }
     }
 
     return null;
 }
 
-pub fn getBlockFromId(id: u32) ?Block {
-    if (state.blocksArr.items.len <= id) {
+pub fn getBlockFromId(id: chunks.BlockId) ?Block {
+    if (state.blocksArr.items.len <= @intFromEnum(id)) {
         return null;
     }
 
-    return state.blocksArr.items[id];
+    return state.blocksArr.items[@intFromEnum(id)];
 }
 
 fn generic_get_textures_names(self: anytype, allocator: *const std.mem.Allocator) !*[][]const u8 {

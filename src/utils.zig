@@ -2,6 +2,8 @@ const std = @import("std");
 
 const zlm = @import("zlm");
 
+pub const IVec3 = zlm.SpecializeOn(i64).Vec3;
+
 pub fn mspc(T: type) type {
     const atomicsUsize = std.atomic.Value(usize);
 

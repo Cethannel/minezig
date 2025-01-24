@@ -228,6 +228,8 @@ fn init() callconv(.C) void {
 
     defer state.allocator.free(blockTextures);
 
+    registerBlockUpdates();
+
     state.atlas = textures.createAtlas(blockTextures, state.allocator) catch unreachable;
 
     for (blockTextures, 0..) |blkName, i| {
@@ -770,6 +772,18 @@ fn defaultBlocks() !void {
     );
 }
 
+fn registerBlockUpdates() void {
+    registerBlockUpdate("water", @ptrCast(&water_update));
+}
+
+fn registerBlockUpdate(blockName: []const u8, callback: blocks.Block.blockUpdate) void {
+    const blockId = blocks.getBlockId(blockName) orelse {
+        std.log.err("Failed to find block with name: {s}", .{blockName});
+        return;
+    };
+    state.blocksArr.items[@intFromEnum(blockId)].inner_block_update = callback;
+}
+
 pub fn ivec3ToVec3(input: IVec3) Vec3 {
     return .{
         .x = @floatFromInt(input.x),
@@ -792,4 +806,65 @@ test "cross test" {
     const out = v1.cross(v2);
 
     try std.testing.expectEqualDeep(IVec3.new(-2, 8, -6), out);
+}
+
+fn water_update(
+    self: *const blocks.Fluid,
+    args: *const blocks.BlockUpdateParams,
+) void {
+    _ = self;
+    std.log.info("Updating water at: {}", .{args.pos});
+    for ([_]i64{ -1, 1 }) |x| {
+        for ([_]i64{ -1, 1 }) |z| {
+            const neighborpos = args.pos.add(util.IVec3.new(x, 0, z));
+            const neighbor = args.chunksMap.getBlockPtr(neighborpos) orelse continue;
+            if (neighbor.id == .Air) {
+                waterProp(args.chunksMap, neighborpos, args.setblockCallback, args.blockUpdateCallback);
+            }
+        }
+    }
+}
+
+fn waterProp(
+    chunkMap: *const chunks.ChunkMap,
+    pos: IVec3,
+    blockSetCallBack: blocks.BlockUpdateParams.setBlockCallbackT,
+    blockUpdateCallback: blocks.BlockUpdateParams.blockUpdateCallbackT,
+) void {
+    const waterId = blocks.getBlockId("water") orelse {
+        std.log.err("Failed to find water id", .{});
+        return;
+    };
+    var neighborWater: u8 = 0;
+    outer: for ([_]i64{ -1, 1 }) |x| {
+        for ([_]i64{ -1, 1 }) |z| {
+            const neighborpos = pos.add(util.IVec3.new(x, 0, z));
+            const neighbor = chunkMap.getBlockPtr(neighborpos) orelse continue;
+            if (neighbor.id == waterId) {
+                neighborWater += 1;
+            }
+            if (neighborWater >= 2) {
+                break :outer;
+            }
+        }
+    }
+
+    if (neighborWater >= 2) {
+        blockSetCallBack(&pos, &chunks.Block{
+            .id = waterId,
+        });
+
+        inline for (.{ -1, 1 }) |x| {
+            inline for (.{ -1, 1 }) |z| {
+                const neighborpos = pos.add(util.IVec3.new(x, 0, z));
+                blockUpdateCallback(&neighborpos);
+            }
+        }
+    }
+}
+
+test "Large int" {
+    const a: u1024 = 10;
+
+    try std.testing.expectEqual(10, a);
 }

@@ -193,12 +193,12 @@ pub const Chunk = struct {
                     const dy = ny - height;
 
                     if (dy < -0.1) {
-                        out.blocks[x][y][z].id = @enumFromInt(stoneId);
+                        out.blocks[x][y][z].id = stoneId;
                     } else if (dy >= -0.1 and dy <= 0.1) {
-                        out.blocks[x][y][z].id = @enumFromInt(grassId);
+                        out.blocks[x][y][z].id = grassId;
                     } else {
                         if (y < 128) {
-                            out.blocks[x][y][z].id = @enumFromInt(waterId);
+                            out.blocks[x][y][z].id = waterId;
                         } else {
                             out.blocks[x][y][z].id = .Air;
                         }
@@ -434,6 +434,16 @@ pub const ChunkMap = struct {
 
     pub fn contains(self: *const Self, pos: IVec3) bool {
         return self.map.contains(pos);
+    }
+
+    pub fn getBlockPtr(self: *const Self, pos: IVec3) ?*Block {
+        const chunkPos = iWorldToChunkPos(pos);
+
+        const chunk = self.getPtr(chunkPos.chunkPos) orelse return null;
+        return &chunk.chunk.blocks //
+        [@intCast(chunkPos.inChunkPos.x)] //
+        [@intCast(chunkPos.inChunkPos.y)] //
+        [@intCast(chunkPos.inChunkPos.z)];
     }
 
     pub fn genMesh(self: *Self, chunkPos: IVec3) !void {
@@ -679,16 +689,22 @@ pub fn chunkToWorldPos(chunkPos: IVec3) zlm.Vec3 {
     };
 }
 
-pub fn worldToChunkPos(worldPos: zlm.Vec3) struct {
+pub const chunkAndWorldPos = struct {
     chunkPos: IVec3,
     inChunkPos: IVec3,
-} {
+};
+
+pub fn worldToChunkPos(worldPos: zlm.Vec3) chunkAndWorldPos {
     const iWorldPos: IVec3 = .{
         .x = @intFromFloat(worldPos.x),
         .y = @intFromFloat(worldPos.y),
         .z = @intFromFloat(worldPos.z),
     };
 
+    return iWorldToChunkPos(iWorldPos);
+}
+
+pub fn iWorldToChunkPos(iWorldPos: utils.IVec3) chunkAndWorldPos {
     const chunkPos = acount_for_negatives(iWorldPos);
     const inChunkPos = convert_to_inchunk_coords(iWorldPos);
 
