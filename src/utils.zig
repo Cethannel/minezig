@@ -166,6 +166,28 @@ fn otherThread(data: []const dataType, queue: *mspc(dataType)) void {
     otherDone = true;
 }
 
+pub fn binaryInsertAssumeCapacity(
+    comptime T: type,
+    arr: *std.ArrayList(T),
+    context: anytype,
+    comptime lessThanFn: fn (@TypeOf(context), lhs: T, rhs: T) bool,
+    value: T,
+) void {
+    var left: usize = 0;
+    var right: usize = arr.items.len;
+
+    while (left < right) {
+        const mid = left + (right - left) / 2;
+        if (lessThanFn(context, arr.items[mid], value)) {
+            left = mid + 1;
+        } else {
+            right = mid;
+        }
+    }
+
+    arr.insertAssumeCapacity(left, value);
+}
+
 test "Multi thread test" {
     const alloc = std.testing.allocator;
 

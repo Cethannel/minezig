@@ -119,6 +119,7 @@ fn setBlockCallback(
     pos: *const utils.IVec3,
     block: *const chunks.Block,
 ) callconv(.C) void {
+    std.log.info("Setting block at: {}", .{pos.*});
     state.sendWorkerThreadQueue.enqueue(.{
         .SetBlock = .{
             .block = block.*,

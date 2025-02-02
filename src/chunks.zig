@@ -570,23 +570,39 @@ pub const RenderChunk = struct {
     }
 
     pub fn render(self: *const @This(), pos: *const IVec3) void {
-        inline for (mesh_variants) |variant| {
-            const cMesh: ?Mesh = @field(self, variant ++ "_mesh");
-            if (cMesh) |mesh| {
-                state.bind.vertex_buffers[0] = mesh.vertexBuffer;
-                state.bind.index_buffer = mesh.indexBuffer;
+        const cMesh: ?Mesh = self.solid_mesh;
+        if (cMesh) |mesh| {
+            state.bind.vertex_buffers[0] = mesh.vertexBuffer;
+            state.bind.index_buffer = mesh.indexBuffer;
 
-                sg.applyBindings(state.bind);
-                const vs_params = shd.VsParams{
-                    .mvp = root.computeVsParams(
-                        @floatFromInt(pos.x * 16),
-                        @floatFromInt(pos.y * 16),
-                        @floatFromInt(pos.z * 16),
-                    ),
-                };
-                sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-                sg.draw(0, @intCast(mesh.indices.items.len), 1);
-            }
+            sg.applyBindings(state.bind);
+            const vs_params = shd.VsParams{
+                .mvp = root.computeVsParams(
+                    @floatFromInt(pos.x * 16),
+                    @floatFromInt(pos.y * 16),
+                    @floatFromInt(pos.z * 16),
+                ),
+            };
+            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+            sg.draw(0, @intCast(mesh.indices.items.len), 1);
+        }
+    }
+    pub fn renderTransparent(self: *const @This(), pos: *const IVec3) void {
+        const cMesh: ?Mesh = self.transparent_mesh;
+        if (cMesh) |mesh| {
+            state.bind.vertex_buffers[0] = mesh.vertexBuffer;
+            state.bind.index_buffer = mesh.indexBuffer;
+
+            sg.applyBindings(state.bind);
+            const vs_params = shd.VsParams{
+                .mvp = root.computeVsParams(
+                    @floatFromInt(pos.x * 16),
+                    @floatFromInt(pos.y * 16),
+                    @floatFromInt(pos.z * 16),
+                ),
+            };
+            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+            sg.draw(0, @intCast(mesh.indices.items.len), 1);
         }
     }
 };

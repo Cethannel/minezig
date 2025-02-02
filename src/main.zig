@@ -315,6 +315,11 @@ fn init() callconv(.C) void {
 }
 
 fn frame() callconv(.C) void {
+    var frameAlloc = std.heap.ArenaAllocator.init(state.allocator);
+    defer frameAlloc.deinit();
+    const alloc = frameAlloc.allocator();
+    _ = &alloc;
+
     if (config.controllerSupport) {
         c.Gamepad_processEvents();
     }
@@ -415,13 +420,15 @@ fn frame() callconv(.C) void {
     sg.endPass();
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
-    var chunkIter = state.chunkMap.map.iterator();
-
-    while (chunkIter.next()) |entry| {
-        const pos = entry.key_ptr;
-        const chunk = entry.value_ptr;
-        //chunk.render(pos);
-        chunk.render(pos);
+    var chunkIter = state.chunkMap.map.keyIterator();
+    while (chunkIter.next()) |chunkPos| {
+        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
+        chunk.render(chunkPos);
+    }
+    chunkIter = state.chunkMap.map.keyIterator();
+    while (chunkIter.next()) |chunkPos| {
+        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
+        chunk.renderTransparent(chunkPos);
     }
     sg.endPass();
 
@@ -837,30 +844,44 @@ fn waterProp(
     };
     var neighborWater: u8 = 0;
     outer: for ([_]i64{ -1, 1 }) |x| {
-        for ([_]i64{ -1, 1 }) |z| {
-            const neighborpos = pos.add(util.IVec3.new(x, 0, z));
-            const neighbor = chunkMap.getBlockPtr(neighborpos) orelse continue;
-            if (neighbor.id == waterId) {
-                neighborWater += 1;
-            }
-            if (neighborWater >= 2) {
-                break :outer;
+        inline for (.{ "x", "z" }) |field| {
+            var offset = util.IVec3.zero;
+            @field(offset, field) = x;
+            const neighborpos = pos.add(offset);
+            if (chunkMap.getBlockPtr(neighborpos)) |neighbor| {
+                std.log.info("Checking neighbor with block: {s}", .{blocks.getBlockFromId(neighbor.id).?.blockName.*});
+                if (neighbor.id == waterId) {
+                    neighborWater += 1;
+                }
+                if (neighborWater >= 2) {
+                    break :outer;
+                }
             }
         }
     }
 
     if (neighborWater >= 2) {
+        std.log.info("Propegating water: {}", .{pos});
         blockSetCallBack(&pos, &chunks.Block{
             .id = waterId,
         });
 
         inline for (.{ -1, 1 }) |x| {
-            inline for (.{ -1, 1 }) |z| {
-                const neighborpos = pos.add(util.IVec3.new(x, 0, z));
+            inline for (.{ "x", "z" }) |field| {
+                var offset = util.IVec3.zero;
+                @field(offset, field) = x;
+                const neighborpos = pos.add(offset);
                 blockUpdateCallback(&neighborpos);
             }
         }
     }
+}
+
+fn posLessThan(ctx: Vec3, a: IVec3, b: IVec3) bool {
+    const dista = ctx.distance2(chunks.chunkToWorldPos(a));
+    const distb = ctx.distance2(chunks.chunkToWorldPos(b));
+
+    return dista < distb;
 }
 
 test "Large int" {
