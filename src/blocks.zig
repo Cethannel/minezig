@@ -39,7 +39,7 @@ pub const Block = extern struct {
         self: *const anyopaque,
         side: usize,
         pos: zlm.Vec3,
-        out: *[4]root.Vertex,
+        out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool;
 
     pub const blockUpdate = *const fn (
@@ -70,8 +70,8 @@ pub const Block = extern struct {
         }
     }
 
-    pub inline fn gen_vertices_sides(self: *const @This(), side: usize, pos: zlm.Vec3) ![4]root.Vertex {
-        var out: [4]root.Vertex = undefined;
+    pub inline fn gen_vertices_sides(self: *const @This(), side: usize, pos: zlm.Vec3) !utils.MultiArray(root.Vertex, 4) {
+        var out = utils.MultiArray(root.Vertex, 4).empty;
 
         if (self.inner_gen_vertices_sides(self.inner, side, pos, &out)) {
             return out;
@@ -353,11 +353,13 @@ pub const Cube = struct {
         self: *const Self,
         side: usize,
         pos: zlm.Vec3,
-        out: *[4]root.Vertex,
+        out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
         //var out: [4]root.Vertex = undefined;
         const numIndices = getNumberTextures();
 
+        var cachedTexture: u32 = 0;
+        var cachedTextureName: []const u8 = "";
         for (0..4) |i| {
             var newVertex = baseVertices[side * 4 + i];
             newVertex.pos.x += pos.x;
@@ -384,15 +386,18 @@ pub const Cube = struct {
                     break :swi texName;
                 },
             };
-            const textureIndex = state.textureMap.get(texInfo.file) orelse return false;
+            if (!std.mem.eql(u8, cachedTextureName, texInfo.file)) {
+                cachedTexture = state.textureMap.get(texInfo.file) orelse return false;
+                cachedTextureName = texInfo.file;
+            }
 
             newVertex.modifierColor = texInfo.colorOveride;
 
             newVertex.v /= @as(f32, @floatFromInt(numIndices));
-            newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
+            newVertex.v += @as(f32, @floatFromInt(cachedTexture)) / //
                 @as(f32, @floatFromInt(numIndices));
 
-            out[i] = newVertex;
+            out.set(i, newVertex);
         }
 
         return true;
@@ -460,7 +465,7 @@ pub const Slab = struct {
         self: *const Self,
         side: usize,
         pos: zlm.Vec3,
-        out: *[4]root.Vertex,
+        out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
         const numIndices = getNumberTextures();
 
@@ -499,7 +504,7 @@ pub const Slab = struct {
             newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
                 @as(f32, @floatFromInt(numIndices));
 
-            out[i] = newVertex;
+            out.set(i, newVertex);
         }
 
         return true;
@@ -794,7 +799,7 @@ pub const Fluid = struct {
         self: *const Self,
         side: usize,
         pos: zlm.Vec3,
-        out: *[4]root.Vertex,
+        out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
         const numIndices = getNumberTextures();
 
@@ -833,7 +838,7 @@ pub const Fluid = struct {
             newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
                 @as(f32, @floatFromInt(numIndices));
 
-            out[i] = newVertex;
+            out.set(i, newVertex);
         }
 
         return true;
@@ -926,12 +931,13 @@ test "Cube Block" {
 
     const cube = try Cube.init_all(allocator, .{ .file = "thing" });
 
-    const out = try cube.get_textures_names(allocator);
-    defer allocator.free(out);
-    defer allocator.free(out[0]);
+    const out = cube.get_textures_names(&allocator) orelse unreachable;
+    defer allocator.destroy(out);
+    defer allocator.free(out.*);
+    defer allocator.free(out.*[0]);
 
     try std.testing.expectEqual(1, out.len);
-    try std.testing.expectEqualStrings("thing", out[0]);
+    try std.testing.expectEqualStrings("thing", out.*[0]);
 
     var block = try toBlock(cube, allocator, "thing");
     block.deinit();

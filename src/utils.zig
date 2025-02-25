@@ -211,3 +211,111 @@ test "Multi thread test" {
         try std.testing.expectEqualDeep(values[i], outVals.items[i]);
     }
 }
+
+const meta = std.meta;
+const mem = std.mem;
+
+pub fn MultiArray(comptime T: type, comptime len: usize) type {
+    return extern struct {
+        bytes: [len * @sizeOf(T)]u8 = undefined,
+
+        const Self = @This();
+
+        pub const empty: Self = .{
+            .bytes = undefined,
+        };
+
+        const Elem = @typeInfo(T).@"struct";
+
+        const Field = meta.FieldEnum(T);
+
+        fn FieldType(comptime field: Field) type {
+            return meta.fieldInfo(T, field).type;
+        }
+
+        const fields = @typeInfo(T).@"struct".fields;
+
+        fn caclOffsetField(
+            comptime field: Field,
+        ) usize {
+            const fieldI = @intFromEnum(field);
+            var offset: usize = 0;
+            inline for (Elem.fields, 0..) |f, i| {
+                if (i >= fieldI) {
+                    break;
+                }
+                offset += @sizeOf(f.type) * len;
+            }
+            return offset;
+        }
+
+        fn caclOffset(
+            comptime field: Field,
+            index: usize,
+        ) usize {
+            const fieldI = @intFromEnum(field);
+            const fieldSize = @sizeOf(fields[fieldI].type);
+            return caclOffsetField(field) + fieldSize * index;
+        }
+
+        fn getFieldPtr(
+            self: *const Self,
+            comptime field: Field,
+            index: usize,
+        ) *FieldType(field) {
+            var arr: [*]const u8 = self.bytes[0..].ptr;
+            arr += caclOffset(field, index);
+            return @constCast(@alignCast(@ptrCast(arr)));
+        }
+
+        pub fn getField(
+            self: *const Self,
+            comptime field: Field,
+            index: usize,
+        ) FieldType(field) {
+            return self.getFieldPtr(field, index).*;
+        }
+
+        pub fn setField(
+            self: *const Self,
+            comptime field: Field,
+            index: usize,
+            value: FieldType(field),
+        ) void {
+            self.getFieldPtr(field, index).* = value;
+        }
+
+        pub fn get(self: *const Self, index: usize) T {
+            var out: T = undefined;
+            inline for (fields, 0..) |field, i| {
+                @field(out, field.name) = self.getField(@enumFromInt(i), index);
+            }
+            return out;
+        }
+
+        pub fn set(self: *Self, index: usize, value: T) void {
+            inline for (fields, 0..) |field, i| {
+                self.setField(@enumFromInt(i), index, @field(value, field.name));
+            }
+        }
+    };
+}
+
+test "MultiArray" {
+    var mArr = MultiArray(struct {
+        x: u32,
+        y: u32,
+    }, 5).empty;
+
+    for (0..5) |value| {
+        mArr.set(value, .{
+            .x = @intCast(value),
+            .y = @intCast(value),
+        });
+    }
+
+    for (0..5) |i| {
+        try std.testing.expectEqual(i, mArr.get(i).x);
+        try std.testing.expectEqual(i, mArr.get(i).y);
+    }
+}

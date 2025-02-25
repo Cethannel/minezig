@@ -8,6 +8,10 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
 
+const zware = @import("zware");
+
+const extism = @import("extism");
+
 const util = @import("utils.zig");
 const workerThread = @import("workerThread.zig");
 
@@ -163,6 +167,26 @@ pub fn main() !void {
     };
     state.allocator = gpa.allocator();
     state.gpa = gpa;
+
+    {
+        const wasm_file = extism.manifest.WasmFile{
+            .path = "./plugins/helloWorld/zig-out/bin/zig-pdk-template.wasm",
+        };
+        const manifest = .{ .wasm = &[_]extism.manifest.Wasm{.{
+            .wasm_file = wasm_file,
+        }} };
+
+        var plugin = try extism.Plugin.initFromManifest(
+            state.allocator,
+            manifest,
+            &[_]extism.Function{},
+            false,
+        );
+        defer plugin.deinit();
+
+        const out = try plugin.call("greet", "Ethan");
+        std.log.info("Out: {s}", .{out});
+    }
 
     sapp.run(.{
         .init_cb = init,
@@ -330,6 +354,151 @@ fn frame() callconv(.C) void {
         .dpi_scale = sapp.dpiScale(),
     });
 
+    playerMovement() catch |err| {
+        std.log.err(
+            "Error when calculating player movement: {s}",
+            .{
+                @errorName(err),
+            },
+        );
+    };
+
+    eventQueue() catch |err| {
+        std.log.err(
+            "Error in processing the event queue: {s}",
+            .{@errorName(err)},
+        );
+    };
+
+    imguiPass() catch |err| {
+        std.log.err(
+            "Error while drawing debug ui: {s}",
+            .{@errorName(err)},
+        );
+    };
+
+    worldRender() catch |err| {
+        std.log.err(
+            "Error while rendering the world: {s}",
+            .{@errorName(err)},
+        );
+    };
+
+    state.selector.render();
+    state.crosshair.render();
+
+    sdtx.print("Second\n", .{});
+
+    inline for (.{ "x", "y", "z" }) |dir| {
+        sdtx.print("{s}: {d:.2}\n", .{ dir, @field(state.cameraPos, dir) });
+    }
+
+    inline for (.{ KC854, C64, ORIC }) |font| {
+        const color = state.colors[font];
+        sdtx.font(font);
+        sdtx.color3b(color.r, color.g, color.b);
+        sdtx.print("Hello '{s}'!\n", .{"there"});
+    }
+
+    sdtx.print("Currently using: {}", .{state.gpa.total_requested_bytes});
+    sdtx.font(KC854);
+    sdtx.color3b(255, 128, 0);
+
+    uiRender() catch |err| {
+        std.log.err(
+            "Error while rendering the UI: {s}",
+            .{@errorName(err)},
+        );
+    };
+}
+
+fn uiRender() !void {
+    sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
+    sdtx.draw();
+    sg.endPass();
+
+    sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
+    simgui.render();
+    sg.endPass();
+
+    sg.commit();
+}
+
+fn eventQueue() !void {
+    while (state.recvWorkerThreadQueue.dequeue()) |msg| {
+        switch (msg) {
+            .NewChunk => |nc| {
+                if (state.chunkMap.getPtr(nc.pos)) |chunk| {
+                    if (chunk.chunk.eql(&nc.chunk)) {
+                        std.log.info("Got same chunk", .{});
+                    }
+                    chunk.clear_meshes();
+                }
+                try state.chunkMap.put(nc.pos, nc.chunk);
+                try state.chunkMap.regenNeighborMeshes(nc.pos);
+                try state.genChunkMeshQueue.enqueue(nc.pos);
+            },
+        }
+    }
+
+    while (state.genChunkMeshQueue.dequeue()) |chunkPos| {
+        try state.chunkMap.genMesh(chunkPos);
+    }
+
+    if (1.0 / sapp.frameDuration() > 60.0) {
+        try chunks.renderDistanceGen();
+    }
+}
+
+fn worldRender() !void {
+    sg.endPass();
+    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
+    sg.applyPipeline(state.pip);
+    var chunkIter = state.chunkMap.map.keyIterator();
+    while (chunkIter.next()) |chunkPos| {
+        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
+        chunk.render(chunkPos);
+    }
+    chunkIter = state.chunkMap.map.keyIterator();
+    while (chunkIter.next()) |chunkPos| {
+        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
+        chunk.renderTransparent(chunkPos);
+    }
+    sg.endPass();
+}
+
+fn imguiPass() !void {
+    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
+    sg.applyPipeline(state.pip);
+
+    ig.igSetNextWindowPos(.{ .x = 400, .y = 10 }, ig.ImGuiCond_Once);
+    ig.igSetNextWindowSize(.{ .x = 400, .y = 100 }, ig.ImGuiCond_Once);
+    _ = ig.igBegin("Hello Dear ImGui!", 0, ig.ImGuiWindowFlags_None);
+    ig.igText("Position:");
+    const dirs = [_][]const u8{ "x", "y", "z" };
+    inline for (dirs) |name| {
+        var thing: c_int = @intCast(@field(state.selector.pos, name));
+        _ = ig.igDragInt(name ++ ": ", &thing);
+        @field(state.selector.pos, name) = thing;
+    }
+
+    _ = ig.igCombo("Block select", &state.selectedBlock, state.blocksNameArr.items.ptr);
+
+    if (ig.igButton("Place block")) {
+        state.sendWorkerThreadQueue.enqueue(.{
+            .SetBlock = .{
+                .pos = state.selector.pos,
+                .block = .{
+                    .id = @enumFromInt(state.selectedBlock),
+                },
+            },
+        }) catch unreachable;
+    }
+
+    ig.igEnd();
+}
+
+fn playerMovement() !void {
     const dt: f32 = @floatCast(sapp.frameDuration() * 60);
 
     state.pitch += state.controllerMouseY * dt;
@@ -359,108 +528,6 @@ fn frame() callconv(.C) void {
     state.cameraPos = state.cameraPos.add(Vec3.new(0.0, state.dy * dt, 0.0));
 
     state.selector.calcPos();
-
-    sdtx.print("First\n", .{});
-
-    sdtx.print("Dt is: {d:.2}\n", .{1.0 / sapp.frameDuration()});
-
-    while (state.recvWorkerThreadQueue.dequeue()) |msg| {
-        switch (msg) {
-            .NewChunk => |nc| {
-                if (state.chunkMap.getPtr(nc.pos)) |chunk| {
-                    if (chunk.chunk.eql(&nc.chunk)) {
-                        std.log.info("Got same chunk", .{});
-                    }
-                    chunk.clear_meshes();
-                }
-                state.chunkMap.put(nc.pos, nc.chunk) catch unreachable;
-                state.chunkMap.regenNeighborMeshes(nc.pos) catch unreachable;
-                state.genChunkMeshQueue.enqueue(nc.pos) catch unreachable;
-            },
-        }
-    }
-
-    while (state.genChunkMeshQueue.dequeue()) |chunkPos| {
-        state.chunkMap.genMesh(chunkPos) catch unreachable;
-    }
-
-    if (1.0 / sapp.frameDuration() > 60.0) {
-        chunks.renderDistanceGen() catch unreachable;
-    }
-
-    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
-    sg.applyPipeline(state.pip);
-
-    ig.igSetNextWindowPos(.{ .x = 400, .y = 10 }, ig.ImGuiCond_Once);
-    ig.igSetNextWindowSize(.{ .x = 400, .y = 100 }, ig.ImGuiCond_Once);
-    _ = ig.igBegin("Hello Dear ImGui!", 0, ig.ImGuiWindowFlags_None);
-    ig.igText("Position:");
-    const dirs = [_][]const u8{ "x", "y", "z" };
-    inline for (dirs) |name| {
-        var thing: c_int = @intCast(@field(state.selector.pos, name));
-        _ = ig.igDragInt(name ++ ": ", &thing);
-        @field(state.selector.pos, name) = thing;
-    }
-
-    _ = ig.igCombo("Block select", &state.selectedBlock, state.blocksNameArr.items.ptr);
-
-    if (ig.igButton("Place block")) {
-        state.sendWorkerThreadQueue.enqueue(.{
-            .SetBlock = .{
-                .pos = state.selector.pos,
-                .block = .{
-                    .id = @enumFromInt(state.selectedBlock),
-                },
-            },
-        }) catch unreachable;
-    }
-
-    ig.igEnd();
-
-    sg.endPass();
-    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
-    sg.applyPipeline(state.pip);
-    var chunkIter = state.chunkMap.map.keyIterator();
-    while (chunkIter.next()) |chunkPos| {
-        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
-        chunk.render(chunkPos);
-    }
-    chunkIter = state.chunkMap.map.keyIterator();
-    while (chunkIter.next()) |chunkPos| {
-        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
-        chunk.renderTransparent(chunkPos);
-    }
-    sg.endPass();
-
-    state.selector.render();
-    state.crosshair.render();
-
-    sdtx.print("Second\n", .{});
-
-    inline for (.{ "x", "y", "z" }) |dir| {
-        sdtx.print("{s}: {d:.2}\n", .{ dir, @field(state.cameraPos, dir) });
-    }
-
-    inline for (.{ KC854, C64, ORIC }) |font| {
-        const color = state.colors[font];
-        sdtx.font(font);
-        sdtx.color3b(color.r, color.g, color.b);
-        sdtx.print("Hello '{s}'!\n", .{"there"});
-    }
-
-    sdtx.print("Currently using: {}", .{state.gpa.total_requested_bytes});
-    sdtx.font(KC854);
-    sdtx.color3b(255, 128, 0);
-
-    sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
-    sdtx.draw();
-    sg.endPass();
-
-    sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
-    simgui.render();
-    sg.endPass();
-
-    sg.commit();
 }
 
 fn cleanup() callconv(.C) void {

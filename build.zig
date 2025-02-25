@@ -1,6 +1,8 @@
 const std = @import("std");
 const Build = std.Build;
 
+const extism = @import("extism");
+
 const textures = @import("src/textures.zig");
 
 // Although this function looks imperative, note that its job is to
@@ -43,22 +45,32 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const zware = b.dependency("zware", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // inject the cimgui header search path into the sokol C library compile step
     dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
 
     const exe = b.addExecutable(.{
-        .name = "sokol-test",
+        .name = "minezig",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
 
+    extism.addLibrary(exe, b);
+
+    exe.addLibraryPath(.{ .cwd_relative = "/home/ethan/Git/wasmer/lib" });
+
     if (target.result.os.tag == .windows) {
         controllerSupport = false;
     }
 
     addControllerSupport(b, target, exe, controllerSupport);
+    addWasmSupport(b, target, exe);
 
     const imports = [_]struct {
         name: []const u8,
@@ -79,6 +91,10 @@ pub fn build(b: *std.Build) !void {
         .{
             .name = "zlm",
             .dep = zlm,
+        },
+        .{
+            .name = "zware",
+            .dep = zware,
         },
     };
 
@@ -136,6 +152,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    extism.addLibrary(exe_unit_tests, b);
 
     addControllerSupport(b, target, exe_unit_tests, controllerSupport);
 
@@ -192,6 +209,17 @@ fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
     }
 
     return shdc_step;
+}
+
+fn addWasmSupport(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    compile: *Build.Step.Compile,
+) void {
+    _ = target;
+    compile.addIncludePath(b.path("externalDeps/wasmtime/include"));
+
+    compile.addObjectFile(b.path("externalDeps/wasmtime/lib64/libwasmtime.a"));
 }
 
 fn addControllerSupport(

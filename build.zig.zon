@@ -1,5 +1,5 @@
 .{
-    .name = "sokol-test",
+    .name = "minezig",
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
     .version = "0.0.0",
@@ -34,6 +34,14 @@
         .cimgui = .{
             .url = "git+https://github.com/floooh/dcimgui.git#6d054aaf23a2a21903023b87316877b1dd4e66a0",
             .hash = "12200aded8c04f0f18420f41bd97392d67da33b74833e8474932ad58e2fedd2f905c",
+        },
+        .zware = .{
+            .url = "git+https://github.com/Cethannel/zware.git#4dea7c8e4d25a5c11802c4517ff5778826a623b6",
+            .hash = "1220183688fe19802db9b6826a0d0fff6a8836fb8403144712a6c839845ee1282c38",
+        },
+        .extism = .{
+            .url = "git+https://github.com/extism/zig-sdk.git?ref=v1.1.0#b905120fa432cc6eb36f8137425020095c3fc58b",
+            .hash = "1220240864011f25d41c58e15db84cb5621dc9effa2bdd51165ec6882147dcacc26b",
         },
     },
     .paths = .{

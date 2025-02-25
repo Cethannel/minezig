@@ -290,9 +290,9 @@ pub const Chunk = struct {
 
                                 if (index2 < 4) {
                                     if (blockStruct.transparent) {
-                                        try transparent_vertices.append(vert[index2]);
+                                        try transparent_vertices.append(vert.get(index2));
                                     } else {
-                                        try solid_vertices.append(vert[index2]);
+                                        try solid_vertices.append(vert.get(index2));
                                     }
                                 }
 
