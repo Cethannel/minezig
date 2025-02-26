@@ -206,6 +206,10 @@ pub fn main() !void {
         gpa.total_requested_bytes,
     });
 
+    std.log.info("Chunks vertex average: {}", .{
+        chunks.vertexCount / chunks.chunkCount,
+    });
+
     if (gpa.deinit() == .leak) {
         std.log.err("Memory leak", .{});
     }
@@ -428,12 +432,6 @@ fn eventQueue() !void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
-                if (state.chunkMap.getPtr(nc.pos)) |chunk| {
-                    if (chunk.chunk.eql(&nc.chunk)) {
-                        std.log.info("Got same chunk", .{});
-                    }
-                    chunk.clear_meshes();
-                }
                 try state.chunkMap.put(nc.pos, nc.chunk);
                 try state.chunkMap.regenNeighborMeshes(nc.pos);
                 try state.genChunkMeshQueue.enqueue(nc.pos);
@@ -445,7 +443,7 @@ fn eventQueue() !void {
         try state.chunkMap.genMesh(chunkPos);
     }
 
-    if (1.0 / sapp.frameDuration() > 60.0) {
+    if (1.0 / sapp.frameDuration() > 30.0) {
         try chunks.renderDistanceGen();
     }
 }
@@ -457,7 +455,9 @@ fn worldRender() !void {
     var chunkIter = state.chunkMap.map.keyIterator();
     while (chunkIter.next()) |chunkPos| {
         const chunk = state.chunkMap.getPtr(chunkPos.*).?;
-        chunk.render(chunkPos);
+        if (chunk.genOtherThread.load(.unordered) == 0) {
+            chunk.render(chunkPos);
+        }
     }
     chunkIter = state.chunkMap.map.keyIterator();
     while (chunkIter.next()) |chunkPos| {

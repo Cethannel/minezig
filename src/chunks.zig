@@ -31,6 +31,9 @@ const fHalfChunkHeight: comptime_float = fChunkHeight / 2.0;
 
 pub const mesh_variants = &.{ "solid", "transparent" };
 
+pub var vertexCount: usize = 0;
+pub var chunkCount: usize = 0;
+
 pub const BlockId = enum(u32) {
     Air = 0,
     _,
@@ -219,11 +222,11 @@ pub const Chunk = struct {
         var solid_maxOffset: u32 = 0;
         var transparent_maxOffset: u32 = 0;
 
-        var solid_vertices = std.ArrayList(root.Vertex).init(allocator);
-        var solid_indices = std.ArrayList(u32).init(allocator);
+        var solid_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, 10240);
+        var solid_indices = try std.ArrayList(u32).initCapacity(allocator, 10240);
 
-        var transparent_vertices = std.ArrayList(root.Vertex).init(allocator);
-        var transparent_indices = std.ArrayList(u32).init(allocator);
+        var transparent_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, 10240);
+        var transparent_indices = try std.ArrayList(u32).initCapacity(allocator, 10240);
 
         for (self.blocks, 0..) |slice, x| {
             for (slice, 0..) |col, y| {
@@ -323,12 +326,28 @@ pub const Chunk = struct {
             }
         }
 
+        inline for (.{
+            &solid_vertices,
+            &solid_indices,
+            &transparent_vertices,
+            &transparent_indices,
+        }) |value| {
+            var new: @typeInfo(@TypeOf(value)).pointer.child = try .initCapacity(allocator, value.items.len);
+            errdefer new.deinit();
+            new.appendSliceAssumeCapacity(value.items);
+            value.deinit();
+            value.* = new;
+        }
+
         if (solid_indices.items.len == 0 //
         and solid_vertices.items.len == 0 //
         and transparent_vertices.items.len == 0 //
         and transparent_indices.items.len == 0) {
             std.log.info("Empty chunk: {any}", .{self.blocks});
         }
+
+        vertexCount += solid_vertices.items.len;
+        chunkCount += 1;
 
         return .{
             .solid = MeshData{
@@ -455,7 +474,10 @@ pub const ChunkMap = struct {
 
             const neighbors = self.genNeigbors(chunkPos);
 
-            const meshData = try rChunk.chunk.gen_mesh(neighbors, self.allocator);
+            const meshData = try rChunk.chunk.gen_mesh(
+                neighbors,
+                self.allocator,
+            );
 
             inline for (mesh_variants) |variant| {
                 const data: Chunk.MeshData = @field(meshData, variant);
@@ -556,6 +578,7 @@ pub const ChunkMap = struct {
 
 pub const RenderChunk = struct {
     chunk: Chunk,
+    genOtherThread: std.atomic.Value(u8) = .init(0),
     solid_mesh: ?Mesh,
     transparent_mesh: ?Mesh,
 
@@ -587,6 +610,7 @@ pub const RenderChunk = struct {
             sg.draw(0, @intCast(mesh.indices.items.len), 1);
         }
     }
+
     pub fn renderTransparent(self: *const @This(), pos: *const IVec3) void {
         const cMesh: ?Mesh = self.transparent_mesh;
         if (cMesh) |mesh| {
