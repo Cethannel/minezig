@@ -168,25 +168,25 @@ pub fn main() !void {
     state.allocator = gpa.allocator();
     state.gpa = gpa;
 
-    {
-        const wasm_file = extism.manifest.WasmFile{
-            .path = "./plugins/helloWorld/zig-out/bin/zig-pdk-template.wasm",
-        };
-        const manifest = .{ .wasm = &[_]extism.manifest.Wasm{.{
-            .wasm_file = wasm_file,
-        }} };
+    //{
+    //    const wasm_file = extism.manifest.WasmFile{
+    //        .path = "./plugins/helloWorld/zig-out/bin/zig-pdk-template.wasm",
+    //    };
+    //    const manifest = .{ .wasm = &[_]extism.manifest.Wasm{.{
+    //        .wasm_file = wasm_file,
+    //    }} };
 
-        var plugin = try extism.Plugin.initFromManifest(
-            state.allocator,
-            manifest,
-            &[_]extism.Function{},
-            false,
-        );
-        defer plugin.deinit();
+    //    var plugin = try extism.Plugin.initFromManifest(
+    //        state.allocator,
+    //        manifest,
+    //        &[_]extism.Function{},
+    //        false,
+    //    );
+    //    defer plugin.deinit();
 
-        const out = try plugin.call("greet", "Ethan");
-        std.log.info("Out: {s}", .{out});
-    }
+    //    const out = try plugin.call("greet", "Ethan");
+    //    std.log.info("Out: {s}", .{out});
+    //}
 
     sapp.run(.{
         .init_cb = init,
@@ -288,6 +288,7 @@ fn init() callconv(.C) void {
     state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
 
     state.chunkMap = chunks.ChunkMap.init(state.allocator);
+    state.chunkMap.map.ensureTotalCapacity(32 * 32) catch unreachable;
 
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
@@ -416,7 +417,7 @@ fn frame() callconv(.C) void {
     };
 }
 
-fn uiRender() !void {
+noinline fn uiRender() !void {
     sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
     sdtx.draw();
     sg.endPass();
@@ -428,7 +429,7 @@ fn uiRender() !void {
     sg.commit();
 }
 
-fn eventQueue() !void {
+noinline fn eventQueue() !void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
@@ -448,7 +449,7 @@ fn eventQueue() !void {
     }
 }
 
-fn worldRender() !void {
+noinline fn worldRender() !void {
     sg.endPass();
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
@@ -467,7 +468,7 @@ fn worldRender() !void {
     sg.endPass();
 }
 
-fn imguiPass() !void {
+noinline fn imguiPass() !void {
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
 
@@ -498,7 +499,7 @@ fn imguiPass() !void {
     ig.igEnd();
 }
 
-fn playerMovement() !void {
+noinline fn playerMovement() !void {
     const dt: f32 = @floatCast(sapp.frameDuration() * 60);
 
     state.pitch += state.controllerMouseY * dt;
