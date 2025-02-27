@@ -126,7 +126,7 @@ pub const Selector = struct {
         return self.indices.items;
     }
 
-    pub fn calcPos(self: *Self) void {
+    pub noinline fn calcPos(self: *Self) void {
         if (!self.last_pos.eql(state.cameraPos) or !self.last_look.eql(state.cameraFront)) {
             self.t = std.math.floatMax(f32);
             self.last_t = std.math.floatMax(f32);
@@ -140,9 +140,10 @@ pub const Selector = struct {
             @field(dirfrac, field.name) = 1.0 / @field(state.cameraFront, field.name);
         }
 
-        inline for ([3]comptime_int{ -1, 0, 1 }) |chunkX| {
-            inline for ([3]comptime_int{ -1, 0, 1 }) |chunkZ| {
+        inline for ([3]comptime_int{ 0, -1, 1 }) |chunkX| {
+            inline for ([3]comptime_int{ 0, -1, 1 }) |chunkZ| {
                 const pos = chunks.worldToChunkPos(state.cameraPos.add(zlm.Vec3.new(16 * chunkX, 0, 16 * chunkZ)));
+                var found = false;
                 if (state.chunkMap.get(pos.chunkPos)) |chunk| {
                     for (chunk.chunk.blocks, 0..) |slice, x| {
                         for (slice, 0..) |column, y| {
@@ -162,6 +163,7 @@ pub const Selector = struct {
 
                                     if (intersects) {
                                         if (self.t < self.last_t) {
+                                            found = true;
                                             self.last_t = self.t;
                                             self.pos = iVecFromVec3(blockPos);
                                         }
@@ -170,6 +172,9 @@ pub const Selector = struct {
                             }
                         }
                     }
+                }
+                if (found and chunkX == 0 and chunkZ == 0) {
+                    break;
                 }
             }
         }

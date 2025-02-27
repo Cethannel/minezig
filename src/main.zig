@@ -85,8 +85,11 @@ const State = struct {
     chunkMap: chunks.ChunkMap = undefined,
 
     cameraPos: Vec3 = Vec3.new(0.0, 129.0, 3.0),
+    prevCameraPos: Vec3 = Vec3.new(0.0, 0.0, 0.0),
     cameraFront: Vec3 = Vec3.new(0.0, 0.0, -1.0),
+    prevCameraFront: Vec3 = Vec3.new(0.0, 0.0, -1.0),
     cameraUp: Vec3 = Vec3.new(0.0, 1.0, 0.0),
+    prevCameraUp: Vec3 = Vec3.new(0.0, 1.0, 0.0),
 
     pitch: f32 = -180,
     yaw: f32 = 90.0,
@@ -429,7 +432,7 @@ noinline fn uiRender() !void {
     sg.commit();
 }
 
-noinline fn eventQueue() !void {
+noinline fn recvWorker() !void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
@@ -439,10 +442,22 @@ noinline fn eventQueue() !void {
             },
         }
     }
+}
 
+noinline fn genMeshes() !void {
+    const start = std.time.milliTimestamp();
     while (state.genChunkMeshQueue.dequeue()) |chunkPos| {
         try state.chunkMap.genMesh(chunkPos);
+        if (std.time.milliTimestamp() - start > 1000 / 20) {
+            break;
+        }
     }
+}
+
+noinline fn eventQueue() !void {
+    try recvWorker();
+
+    try genMeshes();
 
     if (1.0 / sapp.frameDuration() > 30.0) {
         try chunks.renderDistanceGen();
@@ -528,7 +543,12 @@ noinline fn playerMovement() !void {
 
     state.cameraPos = state.cameraPos.add(Vec3.new(0.0, state.dy * dt, 0.0));
 
-    state.selector.calcPos();
+    if (!state.cameraPos.eql(state.prevCameraPos) or !state.cameraFront.eql(state.prevCameraFront) or !state.cameraUp.eql(state.prevCameraUp)) {
+        state.selector.calcPos();
+        state.prevCameraPos = state.cameraPos;
+        state.prevCameraFront = state.cameraFront;
+        state.prevCameraUp = state.cameraUp;
+    }
 }
 
 fn cleanup() callconv(.C) void {

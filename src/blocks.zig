@@ -356,51 +356,36 @@ pub const Cube = struct {
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
         //var out: [4]root.Vertex = undefined;
-        const numIndices = getNumberTextures();
 
-        var cachedTexture: u32 = 0;
-        var cachedTextureName: []const u8 = "";
-        for (0..4) |i| {
-            var newVertex = baseVertices[side * 4 + i];
-            newVertex.pos.x += pos.x;
-            newVertex.pos.y += pos.y;
-            newVertex.pos.z += pos.z;
+        const texInfo = swi: switch (self.sides) {
+            .All => |all| all,
+            .TopOthers => |topOthers| {
+                var texName = topOthers.other;
+                if (side == 5) {
+                    texName = topOthers.top;
+                }
+                break :swi texName;
+            },
+            .TopBotOthers => |topOthers| {
+                var texName = topOthers.other;
+                if (side == 5) {
+                    texName = topOthers.top;
+                }
+                if (side == 4) {
+                    texName = topOthers.bot;
+                }
+                break :swi texName;
+            },
+        };
 
-            const texInfo = swi: switch (self.sides) {
-                .All => |all| all,
-                .TopOthers => |topOthers| {
-                    var texName = topOthers.other;
-                    if (side == 5) {
-                        texName = topOthers.top;
-                    }
-                    break :swi texName;
-                },
-                .TopBotOthers => |topOthers| {
-                    var texName = topOthers.other;
-                    if (side == 5) {
-                        texName = topOthers.top;
-                    }
-                    if (side == 4) {
-                        texName = topOthers.bot;
-                    }
-                    break :swi texName;
-                },
-            };
-            if (!std.mem.eql(u8, cachedTextureName, texInfo.file)) {
-                cachedTexture = state.textureMap.get(texInfo.file) orelse return false;
-                cachedTextureName = texInfo.file;
-            }
-
-            newVertex.modifierColor = texInfo.colorOveride;
-
-            newVertex.v /= @as(f32, @floatFromInt(numIndices));
-            newVertex.v += @as(f32, @floatFromInt(cachedTexture)) / //
-                @as(f32, @floatFromInt(numIndices));
-
-            out.set(i, newVertex);
-        }
-
-        return true;
+        return gen_vertices_sides_from_base(
+            side,
+            pos,
+            out,
+            baseVertices[0..],
+            &texInfo,
+            zlm.Vec3.one,
+        );
     }
 
     pub fn deinit(self: *Self) callconv(.C) void {
@@ -430,6 +415,38 @@ pub const Cube = struct {
         return block;
     }
 };
+
+fn gen_vertices_sides_from_base(
+    side: usize,
+    pos: zlm.Vec3,
+    out: *utils.MultiArray(root.Vertex, 4),
+    baseVerts: []const root.Vertex,
+    texInfo: *const SideInfo,
+    sideScale: zlm.Vec3,
+) bool {
+    const numIndices = getNumberTextures();
+    const texture = state.textureMap.get(texInfo.file) orelse return false;
+
+    const invNumIndices = 1.0 / @as(f32, @floatFromInt(numIndices));
+    const textureOffset = @as(f32, @floatFromInt(texture)) * invNumIndices;
+
+    for (0..4) |i| {
+        const base = &baseVerts[side * 4 + i];
+        var newVertex: root.Vertex = undefined;
+        newVertex.pos = base.pos.mul(sideScale).add(pos);
+
+        newVertex.modifierColor = texInfo.colorOveride;
+
+        newVertex.u = base.u;
+        newVertex.v = base.v * invNumIndices + textureOffset;
+
+        newVertex.modifierColor = texInfo.colorOveride;
+
+        out.set(i, newVertex);
+    }
+
+    return true;
+}
 
 pub const Slab = struct {
     allocator: std.mem.Allocator,
@@ -467,47 +484,35 @@ pub const Slab = struct {
         pos: zlm.Vec3,
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
-        const numIndices = getNumberTextures();
+        const texInfo = swi: switch (self.sides) {
+            .All => |all| all,
+            .TopOthers => |topOthers| {
+                var texName = topOthers.other;
+                if (side == 5) {
+                    texName = topOthers.top;
+                }
+                break :swi texName;
+            },
+            .TopBotOthers => |topOthers| {
+                var texName = topOthers.other;
+                if (side == 5) {
+                    texName = topOthers.top;
+                }
+                if (side == 4) {
+                    texName = topOthers.bot;
+                }
+                break :swi texName;
+            },
+        };
 
-        for (0..4) |i| {
-            var newVertex = baseVertices[side * 4 + i];
-            newVertex.pos.y /= 2;
-            newVertex.pos.x += pos.x;
-            newVertex.pos.y += pos.y;
-            newVertex.pos.z += pos.z;
-
-            const texInfo = swi: switch (self.sides) {
-                .All => |all| all,
-                .TopOthers => |topOthers| {
-                    var texName = topOthers.other;
-                    if (side == 5) {
-                        texName = topOthers.top;
-                    }
-                    break :swi texName;
-                },
-                .TopBotOthers => |topOthers| {
-                    var texName = topOthers.other;
-                    if (side == 5) {
-                        texName = topOthers.top;
-                    }
-                    if (side == 4) {
-                        texName = topOthers.bot;
-                    }
-                    break :swi texName;
-                },
-            };
-            const textureIndex = state.textureMap.get(texInfo.file) orelse return false;
-
-            newVertex.modifierColor = texInfo.colorOveride;
-
-            newVertex.v /= @as(f32, @floatFromInt(numIndices)) * 2;
-            newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
-                @as(f32, @floatFromInt(numIndices));
-
-            out.set(i, newVertex);
-        }
-
-        return true;
+        return gen_vertices_sides_from_base(
+            side,
+            pos,
+            out,
+            baseVertices[0..],
+            &texInfo,
+            zlm.Vec3.new(1.0, 0.5, 1.0),
+        );
     }
 
     pub fn deinit(self: *Self) callconv(.C) void {
@@ -801,47 +806,35 @@ pub const Fluid = struct {
         pos: zlm.Vec3,
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
-        const numIndices = getNumberTextures();
+        const texInfo = swi: switch (self.sides) {
+            .All => |all| all,
+            .TopOthers => |topOthers| {
+                var texName = topOthers.other;
+                if (side == 5) {
+                    texName = topOthers.top;
+                }
+                break :swi texName;
+            },
+            .TopBotOthers => |topOthers| {
+                var texName = topOthers.other;
+                if (side == 5) {
+                    texName = topOthers.top;
+                }
+                if (side == 4) {
+                    texName = topOthers.bot;
+                }
+                break :swi texName;
+            },
+        };
 
-        for (0..4) |i| {
-            var newVertex = baseVertices[side * 4 + i];
-            newVertex.pos.y *= (15.0 / 16.0);
-            newVertex.pos.x += pos.x;
-            newVertex.pos.y += pos.y;
-            newVertex.pos.z += pos.z;
-
-            const texInfo = swi: switch (self.sides) {
-                .All => |all| all,
-                .TopOthers => |topOthers| {
-                    var texName = topOthers.other;
-                    if (side == 5) {
-                        texName = topOthers.top;
-                    }
-                    break :swi texName;
-                },
-                .TopBotOthers => |topOthers| {
-                    var texName = topOthers.other;
-                    if (side == 5) {
-                        texName = topOthers.top;
-                    }
-                    if (side == 4) {
-                        texName = topOthers.bot;
-                    }
-                    break :swi texName;
-                },
-            };
-            const textureIndex = state.textureMap.get(texInfo.file) orelse return false;
-
-            newVertex.modifierColor = texInfo.colorOveride;
-
-            newVertex.v /= @as(f32, @floatFromInt(numIndices)) * 2;
-            newVertex.v += @as(f32, @floatFromInt(textureIndex)) / //
-                @as(f32, @floatFromInt(numIndices));
-
-            out.set(i, newVertex);
-        }
-
-        return true;
+        return gen_vertices_sides_from_base(
+            side,
+            pos,
+            out,
+            baseVertices[0..],
+            &texInfo,
+            zlm.Vec3.new(1.0, comptime 15.0 / 16.0, 1.0),
+        );
     }
 
     pub fn deinit(self: *Self) callconv(.C) void {

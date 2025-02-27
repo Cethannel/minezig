@@ -215,7 +215,7 @@ pub const Chunk = struct {
         return out;
     }
 
-    pub fn gen_mesh(self: *const @This(), neighbor_sides: Sides, allocator: std.mem.Allocator) !struct {
+    pub noinline fn gen_mesh(self: *const @This(), neighbor_sides: Sides, allocator: std.mem.Allocator) !struct {
         solid: MeshData,
         transparent: MeshData,
     } {
@@ -233,44 +233,44 @@ pub const Chunk = struct {
                 for (col, 0..) |block, z| {
                     if (block.id != .Air) {
                         face: for (0..6) |index1| {
-                            var neighborBlock: Block = Block.Air;
+                            var neighborBlock: *const Block = &Block.Air;
                             switch (index1) {
                                 0 => {
                                     if (z != 0) {
-                                        neighborBlock = self.blocks[x][y][z - 1];
+                                        neighborBlock = &self.blocks[x][y][z - 1];
                                     } else {
-                                        neighborBlock = neighbor_sides.neg_z[x][y];
+                                        neighborBlock = &neighbor_sides.neg_z[x][y];
                                     }
                                 },
                                 1 => {
                                     if (z != 15) {
-                                        neighborBlock = self.blocks[x][y][z + 1];
+                                        neighborBlock = &self.blocks[x][y][z + 1];
                                     } else {
-                                        neighborBlock = neighbor_sides.z[x][y];
+                                        neighborBlock = &neighbor_sides.z[x][y];
                                     }
                                 },
                                 2 => {
                                     if (x != 0) {
-                                        neighborBlock = self.blocks[x - 1][y][z];
+                                        neighborBlock = &self.blocks[x - 1][y][z];
                                     } else {
-                                        neighborBlock = neighbor_sides.neg_x[z][y];
+                                        neighborBlock = &neighbor_sides.neg_x[z][y];
                                     }
                                 },
                                 3 => {
                                     if (x != 15) {
-                                        neighborBlock = self.blocks[x + 1][y][z];
+                                        neighborBlock = &self.blocks[x + 1][y][z];
                                     } else {
-                                        neighborBlock = neighbor_sides.x[z][y];
+                                        neighborBlock = &neighbor_sides.x[z][y];
                                     }
                                 },
                                 4 => {
                                     if (y != 0) {
-                                        neighborBlock = self.blocks[x][y - 1][z];
+                                        neighborBlock = &self.blocks[x][y - 1][z];
                                     }
                                 },
                                 5 => {
                                     if (y != 255) {
-                                        neighborBlock = self.blocks[x][y + 1][z];
+                                        neighborBlock = &self.blocks[x][y + 1][z];
                                     }
                                 },
                                 else => @panic("Index should not excede 5"),
@@ -279,7 +279,8 @@ pub const Chunk = struct {
                             const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
                             const neighborStruct = state.blocksArr.items[@intFromEnum(neighborBlock.id)];
 
-                            if (neighborBlock.id != .Air and blockStruct.transparent == neighborStruct.transparent) {
+                            if (neighborBlock.id != .Air //
+                            and blockStruct.transparent == neighborStruct.transparent) {
                                 continue :face;
                             }
 
@@ -332,11 +333,17 @@ pub const Chunk = struct {
             &transparent_vertices,
             &transparent_indices,
         }) |value| {
-            var new: @typeInfo(@TypeOf(value)).pointer.child = try .initCapacity(allocator, value.items.len);
-            errdefer new.deinit();
-            new.appendSliceAssumeCapacity(value.items);
-            value.deinit();
-            value.* = new;
+            {
+                var new: @typeInfo(@TypeOf(value)).pointer.child = //
+                    try .initCapacity(
+                    allocator,
+                    value.items.len,
+                );
+                errdefer new.deinit();
+                new.appendSliceAssumeCapacity(value.items);
+                value.deinit();
+                value.* = new;
+            }
         }
 
         if (solid_indices.items.len == 0 //
@@ -418,11 +425,18 @@ pub const ChunkMap = struct {
     }
 
     pub fn put(self: *@This(), pos: IVec3, chunk: Chunk) !void {
-        const rchunk = RenderChunk{
+        var rchunk = RenderChunk{
             .chunk = chunk,
             .solid_mesh = null,
             .transparent_mesh = null,
         };
+
+        if (self.map.getPtr(pos)) |c| {
+            inline for (mesh_variants) |varName| {
+                @field(rchunk, varName ++ "_mesh") = //
+                    @field(c, varName ++ "_mesh");
+            }
+        }
 
         try self.map.put(pos, rchunk);
     }
@@ -465,7 +479,7 @@ pub const ChunkMap = struct {
         [@intCast(chunkPos.inChunkPos.z)];
     }
 
-    pub fn genMesh(self: *Self, chunkPos: IVec3) !void {
+    pub noinline fn genMesh(self: *Self, chunkPos: IVec3) !void {
         if (config.chunkGenLog) {
             std.log.info("Generating chunk at: {}", .{chunkPos});
         }
@@ -526,8 +540,8 @@ pub const ChunkMap = struct {
         self.map.deinit();
     }
 
-    fn genNeigbors(self: *const @This(), chunkPos: IVec3) Sides {
-        var out: Sides = Sides.AllAir;
+    noinline fn genNeigbors(self: *const @This(), chunkPos: IVec3) Sides {
+        var out: Sides = undefined;
 
         inline for ([_][]const u8{ "x", "z" }) |dir| {
             inline for ([_]i64{ 1, -1 }) |offset| {
@@ -539,6 +553,12 @@ pub const ChunkMap = struct {
                         @field(out, dir) = @field(neibor.chunk.sides, "neg_" ++ dir);
                     } else if (offset == -1) {
                         @field(out, "neg_" ++ dir) = @field(neibor.chunk.sides, dir);
+                    }
+                } else {
+                    if (offset == 1) {
+                        @field(out, dir) = @field(Sides.AllAir, "neg_" ++ dir);
+                    } else if (offset == -1) {
+                        @field(out, "neg_" ++ dir) = @field(Sides.AllAir, dir);
                     }
                 }
             }
@@ -590,6 +610,10 @@ pub const RenderChunk = struct {
 
             @field(self, variant ++ "_mesh") = null;
         }
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.clear_meshes();
     }
 
     pub fn render(self: *const @This(), pos: *const IVec3) void {
