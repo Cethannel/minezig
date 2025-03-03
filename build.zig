@@ -50,6 +50,11 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const zclay = b.dependency("zclay", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // inject the cimgui header search path into the sokol C library compile step
     dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
 
@@ -95,6 +100,10 @@ pub fn build(b: *std.Build) !void {
         .{
             .name = "zware",
             .dep = zware,
+        },
+        .{
+            .name = "zclay",
+            .dep = zclay,
         },
     };
 

@@ -8,6 +8,8 @@ const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
 
+const clayRender = @import("clay_render.zig");
+
 const zware = @import("zware");
 
 const extism = @import("extism");
@@ -16,6 +18,8 @@ const util = @import("utils.zig");
 const workerThread = @import("workerThread.zig");
 
 const config = @import("config");
+
+const clay = @import("zclay");
 
 const c = if (config.controllerSupport) @cImport(
     @cInclude("Gamepad.h"),
@@ -166,7 +170,7 @@ pub const Vertex = extern struct {
 
 pub fn main() !void {
     var gpa = State.GPA{
-        //.requested_memory_limit = 4 * 1024 * 1024 * 1024,
+        .requested_memory_limit = 1 * 1024 * 1024 * 1024,
     };
     state.allocator = gpa.allocator();
     state.gpa = gpa;
@@ -281,7 +285,7 @@ fn init() callconv(.C) void {
 
     state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
-    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 1028 * 4) catch unreachable;
+    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 32 * 32) catch unreachable;
 
     state.sendWorkerThreadQueue = util.mspc(workerThread.toWorkerThreadMessage) //
         .init(state.allocator, 1024) catch unreachable;
@@ -445,12 +449,8 @@ noinline fn recvWorker() !void {
 }
 
 noinline fn genMeshes() !void {
-    const start = std.time.milliTimestamp();
     while (state.genChunkMeshQueue.dequeue()) |chunkPos| {
         try state.chunkMap.genMesh(chunkPos);
-        if (std.time.milliTimestamp() - start > 1000 / 20) {
-            break;
-        }
     }
 }
 

@@ -43,6 +43,10 @@
             .url = "git+https://github.com/extism/zig-sdk.git?ref=v1.1.0#b905120fa432cc6eb36f8137425020095c3fc58b",
             .hash = "1220240864011f25d41c58e15db84cb5621dc9effa2bdd51165ec6882147dcacc26b",
         },
+        .zclay = .{
+            .url = "git+https://github.com/johan0A/clay-zig-bindings.git#c26ef9d4b6b591caeb1750869abcdc50446b33c1",
+            .hash = "12200ea1ea60ded00ab2c4026dd1161d61193965467c4874daefa7b7bc94da9ce687",
+        },
     },
     .paths = .{
         "build.zig",
