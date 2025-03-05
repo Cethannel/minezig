@@ -1,5 +1,5 @@
 .{
-    .name = "minezig",
+    .name = .minezig,
     // This is a [Semantic Version](https://semver.org/).
     // In a future version of Zig it will be used for package deduplication.
     .version = "0.0.0",
@@ -7,7 +7,7 @@
     // This field is optional.
     // This is currently advisory only; Zig does not yet do anything
     // with this value.
-    //.minimum_zig_version = "0.11.0",
+    .minimum_zig_version = "0.14.0",
 
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
@@ -16,28 +16,24 @@
     // internet connectivity.
     .dependencies = .{
         .sokol = .{
-            .url = "git+https://github.com/floooh/sokol-zig.git#de3316595dcf5c505198dbf98e56167f8c1d154c",
-            .hash = "1220b9785551e2201b045b2bcc7ec7cde98717acf7bd0c9e83d23e9396970ed61cf8",
+            .url = "git+https://github.com/floooh/sokol-zig.git#d8673ff12878fdb251d04ee97279cf30870e147f",
+            .hash = "sokol-0.1.0-pb1HK5NgNgDWuuAB-CpH2rAjRKIcuONrrFVDmyJaW4Ly",
         },
         .zigimg = .{
-            .url = "https://github.com/zigimg/zigimg/archive/5b5d718159c6ec223a54c9bb960690576e5df9c2.tar.gz",
-            .hash = "122040d9cc905342547e1e9da227a7f16fae5e7ae23134cb62aaef64c5b2c4f58828",
+            .url = "git+https://github.com/Cethannel/zigimg.git#64705348779b0b24d1f638c857cba42caf592882",
+            .hash = "zigimg-0.1.0-meDTrz9eEAA9BebDVEhuvbV1spX1NWa3BxyQrvzxrTXV",
         },
         .zlm = .{
             .url = "git+https://github.com/Cethannel/zlm#75f7f60c3ea212cbda2d0941c968cded692bbf0a",
             .hash = "12207c4015ee2d8352879e0950f644595e1082e6606db3ca2f88db54e74d8fb11e2f",
         },
         .zgui = .{
-            .url = "git+https://github.com/zig-gamedev/zgui#5e268ec8f19f640a064542429270737d2f19ad31",
-            .hash = "1220e4a659899a9b99eec44ed85280fd7a9d87b38587759d3b9a918619d491fe78b4",
+            .url = "git+https://github.com/zig-gamedev/zgui.git#5f0e01e8cd7f423a27ad56a712e9770a81d5d272",
+            .hash = "zgui-0.6.0-dev-AAAAAA7MawCe458R1hAPhLhIhYtASPII9w4GCRzPYDh5",
         },
         .cimgui = .{
-            .url = "git+https://github.com/floooh/dcimgui.git#6d054aaf23a2a21903023b87316877b1dd4e66a0",
-            .hash = "12200aded8c04f0f18420f41bd97392d67da33b74833e8474932ad58e2fedd2f905c",
-        },
-        .zware = .{
-            .url = "git+https://github.com/Cethannel/zware.git#4dea7c8e4d25a5c11802c4517ff5778826a623b6",
-            .hash = "1220183688fe19802db9b6826a0d0fff6a8836fb8403144712a6c839845ee1282c38",
+            .url = "git+https://github.com/floooh/dcimgui.git#387dd2b3dcbb3380ad35b8efa54624564ecfd759",
+            .hash = "cimgui-0.1.0-44ClkVShhQApVaApfb_mhXPpp08yqiB3zIBR0WYjbwwI",
         },
         .extism = .{
             .url = "git+https://github.com/extism/zig-sdk.git?ref=v1.1.0#b905120fa432cc6eb36f8137425020095c3fc58b",
@@ -56,4 +52,6 @@
         //"LICENSE",
         //"README.md",
     },
+
+    .fingerprint = 0x4c83ab4702405d3d,
 }

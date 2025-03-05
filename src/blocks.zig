@@ -246,7 +246,7 @@ fn checkType(
                     const fnInfoActual = @as(std.builtin.Type.Fn, fnInfo);
                     const iFnInfoActual = @as(std.builtin.Type.Fn, otherFieldTypeInfo.@"fn");
 
-                    if (fnInfoActual.calling_convention != iFnInfoActual.calling_convention) {
+                    if (!fnInfoActual.calling_convention.eql(iFnInfoActual.calling_convention)) {
                         @compileError(std.fmt.comptimePrint(
                             "For function: {s}.{s}\n" ++ //
                                 "Expected calling convention: `{s}` but" ++ //

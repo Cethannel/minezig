@@ -42,7 +42,9 @@ pub const BlockId = enum(u32) {
 pub const Block = struct {
     id: BlockId,
 
-    pub const Air = .{
+    const Self = @This();
+
+    pub const Air: Self = .{
         .id = .Air,
     };
 
@@ -336,9 +338,9 @@ pub const Chunk = struct {
             {
                 var new: @typeInfo(@TypeOf(value)).pointer.child = //
                     try .initCapacity(
-                    allocator,
-                    value.items.len,
-                );
+                        allocator,
+                        value.items.len,
+                    );
                 errdefer new.deinit();
                 new.appendSliceAssumeCapacity(value.items);
                 value.deinit();

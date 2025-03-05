@@ -10,8 +10,6 @@ const sdtx = sokol.debugtext;
 
 const clayRender = @import("clay_render.zig");
 
-const zware = @import("zware");
-
 const extism = @import("extism");
 
 const util = @import("utils.zig");
@@ -58,7 +56,7 @@ const crosshair = @import("crosshair.zig");
 
 const Color = struct { r: u8, g: u8, b: u8 };
 
-pub const std_options = .{
+pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
@@ -170,7 +168,7 @@ pub const Vertex = extern struct {
 
 pub fn main() !void {
     var gpa = State.GPA{
-        .requested_memory_limit = 1 * 1024 * 1024 * 1024,
+        .requested_memory_limit = 4 * 1024 * 1024 * 1024,
     };
     state.allocator = gpa.allocator();
     state.gpa = gpa;

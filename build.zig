@@ -45,11 +45,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    const zware = b.dependency("zware", .{
-        .target = target,
-        .optimize = optimize,
-    });
-
     const zclay = b.dependency("zclay", .{
         .target = target,
         .optimize = optimize,
@@ -67,8 +62,6 @@ pub fn build(b: *std.Build) !void {
     });
 
     extism.addLibrary(exe, b);
-
-    exe.addLibraryPath(.{ .cwd_relative = "/home/ethan/Git/wasmer/lib" });
 
     if (target.result.os.tag == .windows) {
         controllerSupport = false;
@@ -96,10 +89,6 @@ pub fn build(b: *std.Build) !void {
         .{
             .name = "zlm",
             .dep = zlm,
-        },
-        .{
-            .name = "zware",
-            .dep = zware,
         },
         .{
             .name = "zclay",
@@ -199,7 +188,7 @@ fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
 
     const shdc_path = sokol_tools_bin_dir ++ shdc;
     const shdc_step = b.step("shaders", "Compile shaders (needs ../sokol-tools-bin)");
-    const glsl = if (target.result.isDarwin()) "glsl410" else "glsl430";
+    const glsl = if (target.result.isDarwinLibC()) "glsl410" else "glsl430";
     const slang = glsl ++ ":metal_macos:hlsl5:glsl300es:wgsl";
     inline for (shaders) |shader| {
         const cmd = b.addSystemCommand(&.{

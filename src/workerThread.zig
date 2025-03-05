@@ -69,7 +69,7 @@ pub fn workerThread() void {
             }
         }
 
-        while (updates.popOrNull()) |update| {
+        while (updates.pop()) |update| {
             std.log.info("Got block update at: {}", .{update});
             if (chunkMap.getBlockPtr(update)) |block| {
                 if (blocks.getBlockFromId(block.id)) |blk| {
