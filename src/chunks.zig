@@ -125,7 +125,7 @@ pub const Chunk = struct {
 
     pub fn gen_solid_chunk() @This() {
         const idThing: u32 = 1;
-        const blocks = .{.{.{Block{ .id = @enumFromInt(idThing) }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
+        const blocks: @TypeOf(@This().blocks) = @splat(@splat(@splat(Block{ .id = @enumFromInt(idThing) })));
         var tmp: @This() = .{
             .blocks = blocks,
             .sides = undefined,
@@ -140,7 +140,7 @@ pub const Chunk = struct {
         @setEvalBranchQuota(chunkWidth * chunkHeight * chunkWidth * 2);
         //var stone = Blocks.getBlockId("stone").?;
         const idThing: u32 = 1;
-        var blocks: [chunkWidth][chunkHeight][chunkWidth]Block = .{.{.{Block{ .id = .Air }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
+        var blocks: [chunkWidth][chunkHeight][chunkWidth]Block = @splat(@splat(@splat(Block{ .id = .Air })));
         for (0..chunkWidth) |x| {
             for (0..chunkHeight / 2) |y| {
                 for (0..chunkWidth) |z| {
@@ -160,7 +160,7 @@ pub const Chunk = struct {
 
     fn genAll2() @This() {
         const idThing: u32 = 2;
-        const blocks = .{.{.{Block{ .id = @enumFromInt(idThing) }} ** chunkWidth} ** chunkHeight} ** chunkWidth;
+        const blocks: @TypeOf(@This().blocks) = @splat(@splat(@splat(Block{ .id = @enumFromInt(idThing) })));
         var tmp: @This() = .{
             .blocks = blocks,
             .sides = undefined,
@@ -398,10 +398,10 @@ const Sides = struct {
     neg_z: [chunkWidth][chunkHeight]Block,
 
     const AllAir = Sides{
-        .x = .{.{Block.Air} ** chunkHeight} ** chunkWidth,
-        .neg_x = .{.{Block.Air} ** chunkHeight} ** chunkWidth,
-        .z = .{.{Block.Air} ** chunkHeight} ** chunkWidth,
-        .neg_z = .{.{Block.Air} ** chunkHeight} ** chunkWidth,
+        .x = @splat(@splat(Block.Air)),
+        .neg_x = @splat(@splat(Block.Air)),
+        .z = @splat(@splat(Block.Air)),
+        .neg_z = @splat(@splat(Block.Air)),
     };
 };
 
@@ -833,10 +833,10 @@ test "GenSides" {
     const chunk = Chunk.genAll2();
 
     const expectedSides = Sides{
-        .x = .{.{.{ .id = @as(BlockId, @enumFromInt(2)) }} ** chunkHeight} ** chunkWidth,
-        .neg_x = .{.{.{ .id = @as(BlockId, @enumFromInt(2)) }} ** chunkHeight} ** chunkWidth,
-        .z = .{.{.{ .id = @as(BlockId, @enumFromInt(2)) }} ** chunkHeight} ** chunkWidth,
-        .neg_z = .{.{.{ .id = @as(BlockId, @enumFromInt(2)) }} ** chunkHeight} ** chunkWidth,
+        .x = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
+        .neg_x = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
+        .z = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
+        .neg_z = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
     };
 
     try std.testing.expectEqualDeep(expectedSides, chunk.sides);
