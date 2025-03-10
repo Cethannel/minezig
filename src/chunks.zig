@@ -39,7 +39,7 @@ pub const BlockId = enum(u32) {
     _,
 };
 
-pub const Block = struct {
+pub const Block = extern struct {
     id: BlockId,
 
     const Self = @This();
@@ -51,6 +51,17 @@ pub const Block = struct {
     pub fn eql(self: *const @This(), other: *const @This()) bool {
         return self.id == other.id;
     }
+};
+
+pub const NeighborBlock = extern struct {
+    x: Block = .Air,
+    neg_x: Block = .Air,
+    y: Block = .Air,
+    neg_y: Block = .Air,
+    z: Block = .Air,
+    neg_z: Block = .Air,
+
+    const Self = @This();
 };
 
 const baseVertices = [_]root.Vertex{
@@ -96,7 +107,6 @@ const baseIndices = [_]u32{
 
 pub const Chunk = struct {
     blocks: [chunkWidth][chunkHeight][chunkWidth]Block,
-    sides: Sides,
 
     pub const MeshData = struct {
         vertices: std.ArrayList(root.Vertex),
@@ -123,15 +133,17 @@ pub const Chunk = struct {
         return true;
     }
 
+    const Solid = gen_solid_chunk();
+    const AllAir = @This(){
+        .blocks = @splat(@splat(@splat(.Air))),
+    };
+
     pub fn gen_solid_chunk() @This() {
         const idThing: u32 = 1;
-        const blocks: @TypeOf(@This().blocks) = @splat(@splat(@splat(Block{ .id = @enumFromInt(idThing) })));
-        var tmp: @This() = .{
+        const blocks: @FieldType(@This(), "blocks") = @splat(@splat(@splat(Block{ .id = @enumFromInt(idThing) })));
+        const tmp: @This() = .{
             .blocks = blocks,
-            .sides = undefined,
         };
-
-        tmp.sides = tmp.gen_sides();
 
         return tmp;
     }
@@ -148,25 +160,19 @@ pub const Chunk = struct {
                 }
             }
         }
-        var tmp: @This() = .{
+        const tmp: @This() = .{
             .blocks = blocks,
-            .sides = undefined,
         };
-
-        tmp.sides = tmp.gen_sides();
 
         return tmp;
     }
 
     fn genAll2() @This() {
         const idThing: u32 = 2;
-        const blocks: @TypeOf(@This().blocks) = @splat(@splat(@splat(Block{ .id = @enumFromInt(idThing) })));
-        var tmp: @This() = .{
+        const blocks: @FieldType(@This(), "blocks") = @splat(@splat(@splat(Block{ .id = @enumFromInt(idThing) })));
+        const tmp: @This() = .{
             .blocks = blocks,
-            .sides = undefined,
         };
-
-        tmp.sides = tmp.gen_sides();
 
         return tmp;
     }
@@ -212,12 +218,14 @@ pub const Chunk = struct {
             }
         }
 
-        out.sides = out.gen_sides();
-
         return out;
     }
 
-    pub noinline fn gen_mesh(self: *const @This(), neighbor_sides: Sides, allocator: std.mem.Allocator) !struct {
+    pub noinline fn gen_mesh(
+        self: *const @This(),
+        neighbor_sides: Sides,
+        allocator: std.mem.Allocator,
+    ) !struct {
         solid: MeshData,
         transparent: MeshData,
     } {
@@ -234,62 +242,75 @@ pub const Chunk = struct {
             for (slice, 0..) |col, y| {
                 for (col, 0..) |block, z| {
                     if (block.id != .Air) {
+                        var neighors: NeighborBlock = .{};
+                        if (x != 0) {
+                            neighors.neg_x = self.blocks[x - 1][y][z];
+                        } else {
+                            neighors.neg_x = neighbor_sides.neg_x[z][y];
+                        }
+                        if (x != 15) {
+                            neighors.x = self.blocks[x + 1][y][z];
+                        } else {
+                            neighors.x = neighbor_sides.x[z][y];
+                        }
+                        if (y != 0) {
+                            neighors.neg_y = self.blocks[x][y - 1][z];
+                        }
+                        if (y != chunkHeight) {
+                            neighors.y = self.blocks[x][y + 1][z];
+                        }
+                        if (z != 0) {
+                            neighors.neg_z = self.blocks[x][y][z - 1];
+                        } else {
+                            neighors.neg_z = neighbor_sides.neg_z[x][y];
+                        }
+                        if (z != 15) {
+                            neighors.z = self.blocks[x][y][z + 1];
+                        } else {
+                            neighors.z = neighbor_sides.z[x][y];
+                        }
                         face: for (0..6) |index1| {
                             var neighborBlock: *const Block = &Block.Air;
                             switch (index1) {
                                 0 => {
-                                    if (z != 0) {
-                                        neighborBlock = &self.blocks[x][y][z - 1];
-                                    } else {
-                                        neighborBlock = &neighbor_sides.neg_z[x][y];
-                                    }
+                                    neighborBlock = &neighors.neg_z;
                                 },
                                 1 => {
-                                    if (z != 15) {
-                                        neighborBlock = &self.blocks[x][y][z + 1];
-                                    } else {
-                                        neighborBlock = &neighbor_sides.z[x][y];
-                                    }
+                                    neighborBlock = &neighors.z;
                                 },
                                 2 => {
-                                    if (x != 0) {
-                                        neighborBlock = &self.blocks[x - 1][y][z];
-                                    } else {
-                                        neighborBlock = &neighbor_sides.neg_x[z][y];
-                                    }
+                                    neighborBlock = &neighors.neg_x;
                                 },
                                 3 => {
-                                    if (x != 15) {
-                                        neighborBlock = &self.blocks[x + 1][y][z];
-                                    } else {
-                                        neighborBlock = &neighbor_sides.x[z][y];
-                                    }
+                                    neighborBlock = &neighors.x;
                                 },
                                 4 => {
-                                    if (y != 0) {
-                                        neighborBlock = &self.blocks[x][y - 1][z];
-                                    }
+                                    neighborBlock = &neighors.neg_y;
                                 },
                                 5 => {
-                                    if (y != 255) {
-                                        neighborBlock = &self.blocks[x][y + 1][z];
-                                    }
+                                    neighborBlock = &neighors.y;
                                 },
                                 else => @panic("Index should not excede 5"),
                             }
 
-                            const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
-                            const neighborStruct = state.blocksArr.items[@intFromEnum(neighborBlock.id)];
-
-                            if (neighborBlock.id != .Air //
-                            and blockStruct.transparent == neighborStruct.transparent) {
+                            if (should_skip_side(&block, neighborBlock)) {
                                 continue :face;
                             }
 
+                            const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
+
                             const indexOffset = if (blockStruct.transparent) transparent_maxOffset else solid_maxOffset;
                             const vert = try state.blocksArr.items[@intFromEnum(block.id)].gen_vertices_sides(
-                                index1,
-                                zlm.vec3(@floatFromInt(x), @floatFromInt(y), @floatFromInt(z)),
+                                .{
+                                    .side = index1,
+                                    .pos = zlm.vec3(
+                                        @floatFromInt(x),
+                                        @floatFromInt(y),
+                                        @floatFromInt(z),
+                                    ),
+                                    .neighbors = neighors,
+                                    .selfBlock = block,
+                                },
                             );
                             for (0..6) |index2| {
                                 var i = index1 * 4 + index2;
@@ -384,10 +405,6 @@ pub const Chunk = struct {
         }
 
         return out;
-    }
-
-    pub fn regen_sides(self: *@This()) void {
-        self.sides = self.gen_sides();
     }
 };
 
@@ -549,12 +566,23 @@ pub const ChunkMap = struct {
             inline for ([_]i64{ 1, -1 }) |offset| {
                 var offsetVec = IVec3.zero;
                 @field(offsetVec, dir) = offset;
+                var inChunkOffsetVec = zlm.SpecializeOn(usize).Vec3.zero;
+                @field(inChunkOffsetVec, dir) = @abs((offset - 1) / 2) * (chunkWidth - 1);
+                var dirMulti = zlm.SpecializeOn(usize).Vec3.one;
+                @field(dirMulti, dir) = 0;
 
                 if (self.map.getPtr(chunkPos.add(offsetVec))) |neibor| {
-                    if (offset == 1) {
-                        @field(out, dir) = @field(neibor.chunk.sides, "neg_" ++ dir);
-                    } else if (offset == -1) {
-                        @field(out, "neg_" ++ dir) = @field(neibor.chunk.sides, dir);
+                    var side = &@field(out, dir);
+                    if (offset == -1) {
+                        side = &@field(out, "neg_" ++ dir);
+                    }
+                    for (0..chunkWidth) |i| {
+                        for (0..chunkHeight) |y| {
+                            side[i][y] = neibor.chunk.blocks //
+                            [dirMulti.x * i + inChunkOffsetVec.x] //
+                                [dirMulti.y * y + inChunkOffsetVec.y] //
+                                [dirMulti.z * i + inChunkOffsetVec.z];
+                        }
                     }
                 } else {
                     if (offset == 1) {
@@ -823,21 +851,65 @@ fn acount_for_negatives(input: IVec3) IVec3 {
     );
 }
 
+fn should_skip_side(
+    block: *const Block,
+    neighbor: *const Block,
+) bool {
+    if (neighbor.id == .Air) {
+        return false;
+    }
+
+    const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
+    const neighborStruct = state.blocksArr.items[@intFromEnum(neighbor.id)];
+
+    if (!blockStruct.transparent and neighborStruct.transparent) {
+        return false;
+    }
+
+    if (blockStruct.should_generate_side(.{
+        .neighbor = neighborStruct,
+    })) |shouldGen| {
+        return shouldGen;
+    }
+
+    const blockBounds = blockStruct.bounds();
+    const neighborBounds = neighborStruct.bounds();
+
+    if (!blockBounds.eql(neighborBounds)) {
+        return false;
+    }
+
+    return true;
+}
+
 test "Convert Int to float" {
     const f: f32 = @floatFromInt(1);
 
     try std.testing.expectEqual(1.0, f);
 }
 
-test "GenSides" {
-    const chunk = Chunk.genAll2();
+test "GenNeighbors" {
+    var map = ChunkMap.init(std.testing.allocator);
+    defer map.deinit();
 
-    const expectedSides = Sides{
-        .x = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
-        .neg_x = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
-        .z = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
-        .neg_z = @splat(@splat(.{ .id = @as(BlockId, @enumFromInt(2)) })),
+    const full = Chunk.Solid;
+    const empty = Chunk.AllAir;
+
+    try map.put(IVec3.zero, full);
+    try map.put(IVec3.unitX, full);
+    try map.put(IVec3.unitX.neg(), empty);
+    try map.put(IVec3.zero, full);
+    try map.put(IVec3.unitZ, full);
+    try map.put(IVec3.unitZ.neg(), empty);
+
+    const neihbors = map.genNeigbors(IVec3.zero);
+
+    const expected = Sides{
+        .x = @splat(@splat(.{ .id = @enumFromInt(1) })),
+        .neg_x = @splat(@splat(.Air)),
+        .z = @splat(@splat(.{ .id = @enumFromInt(1) })),
+        .neg_z = @splat(@splat(.Air)),
     };
 
-    try std.testing.expectEqualDeep(expectedSides, chunk.sides);
+    try std.testing.expectEqualDeep(expected, neihbors);
 }

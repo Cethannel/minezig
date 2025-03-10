@@ -26,6 +26,7 @@ pub const Vertex = extern struct {
 
 pub const Selector = struct {
     pos: IVec3 = IVec3.zero,
+    place_pos: IVec3 = IVec3.zero,
     vertices: std.ArrayList(Vertex) = undefined,
     indices: std.ArrayList(u32) = undefined,
     allocator: std.mem.Allocator = undefined,
@@ -94,17 +95,19 @@ pub const Selector = struct {
         self.bind.vertex_buffers[0] = self.vertexBuffer;
         self.bind.index_buffer = self.indexBuffer;
 
-        const vs_params = shd.VsParams{ .mvp = root.computeVsParams(
-            @floatFromInt(self.pos.x),
-            @floatFromInt(self.pos.y),
-            @floatFromInt(self.pos.z),
-        ) };
+        inline for (.{ self.pos, self.place_pos }) |pos| {
+            const vs_params = shd.VsParams{ .mvp = root.computeVsParams(
+                @floatFromInt(pos.x),
+                @floatFromInt(pos.y),
+                @floatFromInt(pos.z),
+            ) };
 
-        sg.applyPipeline(self.pip);
-        sg.applyBindings(self.bind);
+            sg.applyPipeline(self.pip);
+            sg.applyBindings(self.bind);
 
-        sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-        sg.draw(0, @intCast(self.indices.items.len), 1);
+            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+            sg.draw(0, @intCast(self.indices.items.len), 1);
+        }
         sg.endPass();
     }
 
@@ -175,6 +178,35 @@ pub const Selector = struct {
                 }
                 if (found and chunkX == 0 and chunkZ == 0) {
                     break;
+                }
+            }
+        }
+
+        var last_t = std.math.floatMax(f32);
+        defer self.t = self.last_t;
+
+        inline for ([3]comptime_int{ 0, -1, 1 }) |x| {
+            inline for ([3]comptime_int{ 0, -1, 1 }) |y| {
+                inline for ([3]comptime_int{ 0, -1, 1 }) |z| {
+                    if (@abs(x) + @abs(y) + @abs(z) != 1) {
+                        continue;
+                    }
+                    const blockPos = vecFromIVec3(self.pos).add(zlm.vec3(x, y, z));
+                    const blockMaxPos = blockPos.add(zlm.Vec3.one);
+
+                    const intersects = self.intersectAABB(
+                        state.cameraPos,
+                        dirfrac,
+                        blockPos,
+                        blockMaxPos,
+                    );
+
+                    if (intersects) {
+                        if (self.t < last_t) {
+                            last_t = self.t;
+                            self.place_pos = iVecFromVec3(blockPos);
+                        }
+                    }
                 }
             }
         }

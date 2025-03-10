@@ -56,7 +56,6 @@ pub fn workerThread() void {
                         std.log.err("Failed to set block at: {}", .{sbData.pos});
                     };
                     const cpos = chunks.worldToChunkPos(utils.ivec3ToVec3(sbData.pos));
-                    chunkMap.getPtr(cpos.chunkPos).?.chunk.regen_sides();
                     getChunk(&chunkMap, cpos.chunkPos) catch unreachable;
                     blockUpdateCallback(&sbData.pos);
                     inline for (.{ -1, 1 }) |x| {

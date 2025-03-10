@@ -25,6 +25,33 @@ pub const BlockUpdateParams = extern struct {
     blockUpdateCallback: blockUpdateCallbackT,
 };
 
+pub const GenVerticesSidesParams = extern struct {
+    side: usize,
+    pos: zlm.Vec3,
+    selfBlock: chunks.Block,
+    neighbors: chunks.NeighborBlock,
+};
+
+pub const ShouldGenerateSidePrams = extern struct {
+    neighbor: Block,
+};
+
+pub const Bounds = extern struct {
+    min: zlm.Vec3,
+    max: zlm.Vec3,
+
+    const Self = @This();
+
+    pub fn eql(self: Self, other: Self) bool {
+        inline for (@typeInfo(Self).@"struct".fields) |field| {
+            if (!@field(self, field.name).eql(@field(other, field.name))) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
 pub const Block = extern struct {
     pub const getTextureNames = *const fn (
         self: *const anyopaque,
@@ -37,14 +64,23 @@ pub const Block = extern struct {
 
     pub const genVerticesSidesFn = *const fn (
         self: *const anyopaque,
-        side: usize,
-        pos: zlm.Vec3,
+        params: *const GenVerticesSidesParams,
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool;
 
     pub const blockUpdate = *const fn (
         self: *const anyopaque,
         params: *const BlockUpdateParams,
+    ) callconv(.C) void;
+
+    pub const shouldGenerateSide = *const fn (
+        self: *const anyopaque,
+        params: *const ShouldGenerateSidePrams,
+    ) callconv(.C) bool;
+
+    pub const boundsFn = *const fn (
+        self: *const anyopaque,
+        bound_out: *Bounds,
     ) callconv(.C) void;
 
     inner: *anyopaque,
@@ -57,6 +93,8 @@ pub const Block = extern struct {
     inner_get_textures_names: getTextureNames,
     inner_gen_vertices_sides: genVerticesSidesFn,
     inner_block_update: ?blockUpdate,
+    inner_should_generate_side: ?shouldGenerateSide,
+    inner_bounds: boundsFn,
     inner_deinit: deinitFn,
 
     pub fn get_textures_names(self: *const @This(), allocator: std.mem.Allocator) ![][]const u8 {
@@ -70,10 +108,13 @@ pub const Block = extern struct {
         }
     }
 
-    pub inline fn gen_vertices_sides(self: *const @This(), side: usize, pos: zlm.Vec3) !utils.MultiArray(root.Vertex, 4) {
+    pub inline fn gen_vertices_sides(
+        self: *const @This(),
+        params: GenVerticesSidesParams,
+    ) !utils.MultiArray(root.Vertex, 4) {
         var out = utils.MultiArray(root.Vertex, 4).empty;
 
-        if (self.inner_gen_vertices_sides(self.inner, side, pos, &out)) {
+        if (self.inner_gen_vertices_sides(self.inner, &params, &out)) {
             return out;
         } else {
             return error.GenVerticesSides;
@@ -84,6 +125,20 @@ pub const Block = extern struct {
         if (self.inner_block_update) |ibu| {
             ibu(self.inner, params);
         }
+    }
+
+    pub inline fn bounds(self: *const @This()) Bounds {
+        var out: Bounds = undefined;
+        self.inner_bounds(self.inner, &out);
+        return out;
+    }
+
+    pub inline fn should_generate_side(
+        self: *const @This(),
+        params: ShouldGenerateSidePrams,
+    ) ?bool {
+        const fun = self.inner_should_generate_side orelse return null;
+        return fun(self.inner, &params);
     }
 
     pub fn deinit(self: *@This()) void {
@@ -349,10 +404,18 @@ pub const Cube = struct {
         return generic_get_textures_names(self, allocator) catch return null;
     }
 
+    pub fn bounds(
+        self: *const Self,
+        bound_out: *Bounds,
+    ) callconv(.C) void {
+        _ = self;
+        bound_out.min = zlm.Vec3.zero;
+        bound_out.min = zlm.Vec3.one;
+    }
+
     pub fn gen_vertices_sides(
         self: *const Self,
-        side: usize,
-        pos: zlm.Vec3,
+        params: *const GenVerticesSidesParams,
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
         //var out: [4]root.Vertex = undefined;
@@ -361,17 +424,17 @@ pub const Cube = struct {
             .All => |all| all,
             .TopOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (side == 5) {
+                if (params.side == 5) {
                     texName = topOthers.top;
                 }
                 break :swi texName;
             },
             .TopBotOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (side == 5) {
+                if (params.side == 5) {
                     texName = topOthers.top;
                 }
-                if (side == 4) {
+                if (params.side == 4) {
                     texName = topOthers.bot;
                 }
                 break :swi texName;
@@ -379,8 +442,8 @@ pub const Cube = struct {
         };
 
         return gen_vertices_sides_from_base(
-            side,
-            pos,
+            params.side,
+            params.pos,
             out,
             baseVertices[0..],
             &texInfo,
@@ -438,7 +501,11 @@ fn gen_vertices_sides_from_base(
         newVertex.modifierColor = texInfo.colorOveride;
 
         newVertex.u = base.u;
-        newVertex.v = base.v * invNumIndices + textureOffset;
+        newVertex.v = base.v * invNumIndices;
+        if (side != 4 and side != 5) {
+            newVertex.v *= sideScale.y;
+        }
+        newVertex.v += textureOffset;
 
         newVertex.modifierColor = texInfo.colorOveride;
 
@@ -451,6 +518,11 @@ fn gen_vertices_sides_from_base(
 pub const Slab = struct {
     allocator: std.mem.Allocator,
     sides: Sides,
+
+    const innerBounds: Bounds = .{
+        .min = zlm.Vec3.zero,
+        .max = zlm.Vec3.new(1.0, 0.5, 1.0),
+    };
 
     const Self = @This();
 
@@ -478,27 +550,34 @@ pub const Slab = struct {
         return generic_get_textures_names(self, allocator) catch return null;
     }
 
+    pub fn bounds(
+        self: *const Self,
+        bound_out: *Bounds,
+    ) callconv(.C) void {
+        _ = self;
+        bound_out.* = innerBounds;
+    }
+
     pub fn gen_vertices_sides(
         self: *const Self,
-        side: usize,
-        pos: zlm.Vec3,
+        params: *const GenVerticesSidesParams,
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
             .TopOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (side == 5) {
+                if (params.side == 5) {
                     texName = topOthers.top;
                 }
                 break :swi texName;
             },
             .TopBotOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (side == 5) {
+                if (params.side == 5) {
                     texName = topOthers.top;
                 }
-                if (side == 4) {
+                if (params.side == 4) {
                     texName = topOthers.bot;
                 }
                 break :swi texName;
@@ -506,8 +585,8 @@ pub const Slab = struct {
         };
 
         return gen_vertices_sides_from_base(
-            side,
-            pos,
+            params.side,
+            params.pos,
             out,
             baseVertices[0..],
             &texInfo,
@@ -740,13 +819,22 @@ pub const Air = struct {
 
     pub fn gen_vertices_sides(
         self: *const Self,
-        side: usize,
-        pos: zlm.Vec3,
+        params: *const GenVerticesSidesParams,
+        out: *utils.MultiArray(root.Vertex, 4),
     ) ![4]root.Vertex {
         _ = self;
-        _ = side;
-        _ = pos;
+        _ = params;
+        _ = out;
         @panic("Called get texture names for air");
+    }
+
+    pub fn bounds(
+        self: *const Self,
+        out_bounds: *Bounds,
+    ) callconv(.C) void {
+        _ = self;
+        _ = out_bounds;
+        @panic("Called bounds for air");
     }
 
     pub fn deinit(self: *Self) void {
@@ -767,7 +855,9 @@ pub const AirBlock = Block{
     .inner_deinit = undefined,
     .inner_get_textures_names = @ptrCast(&Air.get_textures_names),
     .inner_gen_vertices_sides = @ptrCast(&Air.gen_vertices_sides),
+    .inner_bounds = undefined,
     .inner_block_update = null,
+    .inner_should_generate_side = null,
 };
 
 pub const Fluid = struct {
@@ -775,6 +865,11 @@ pub const Fluid = struct {
     sides: Sides,
 
     const Self = @This();
+
+    const innerBounds: Bounds = .{
+        .min = zlm.Vec3.zero,
+        .max = zlm.Vec3.new(1.0, 15.0 / 16.0, 1.0),
+    };
 
     pub fn init_all(allocator: std.mem.Allocator, all: SideInfo) !Self {
         const sides = try all.dupe(allocator);
@@ -800,40 +895,54 @@ pub const Fluid = struct {
         return generic_get_textures_names(self, allocator) catch return null;
     }
 
+    pub fn bounds(
+        self: *const Self,
+        bound_out: *Bounds,
+    ) callconv(.C) void {
+        _ = self;
+        bound_out.* = innerBounds;
+    }
+
     pub fn gen_vertices_sides(
         self: *const Self,
-        side: usize,
-        pos: zlm.Vec3,
+        params: *const GenVerticesSidesParams,
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
             .TopOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (side == 5) {
+                if (params.side == 5) {
                     texName = topOthers.top;
                 }
                 break :swi texName;
             },
             .TopBotOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (side == 5) {
+                if (params.side == 5) {
                     texName = topOthers.top;
                 }
-                if (side == 4) {
+                if (params.side == 4) {
                     texName = topOthers.bot;
                 }
                 break :swi texName;
             },
         };
 
+        var sideScale =
+            zlm.Vec3.new(1.0, comptime 15.0 / 16.0, 1.0);
+
+        if (params.selfBlock.id == params.neighbors.y.id) {
+            sideScale = zlm.Vec3.one;
+        }
+
         return gen_vertices_sides_from_base(
-            side,
-            pos,
+            params.side,
+            params.pos,
             out,
             baseVertices[0..],
             &texInfo,
-            zlm.Vec3.new(1.0, comptime 15.0 / 16.0, 1.0),
+            sideScale,
         );
     }
 

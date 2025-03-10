@@ -173,26 +173,6 @@ pub fn main() !void {
     state.allocator = gpa.allocator();
     state.gpa = gpa;
 
-    //{
-    //    const wasm_file = extism.manifest.WasmFile{
-    //        .path = "./plugins/helloWorld/zig-out/bin/zig-pdk-template.wasm",
-    //    };
-    //    const manifest = .{ .wasm = &[_]extism.manifest.Wasm{.{
-    //        .wasm_file = wasm_file,
-    //    }} };
-
-    //    var plugin = try extism.Plugin.initFromManifest(
-    //        state.allocator,
-    //        manifest,
-    //        &[_]extism.Function{},
-    //        false,
-    //    );
-    //    defer plugin.deinit();
-
-    //    const out = try plugin.call("greet", "Ethan");
-    //    std.log.info("Out: {s}", .{out});
-    //}
-
     sapp.run(.{
         .init_cb = init,
         .frame_cb = frame,
@@ -646,32 +626,34 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
             }
         },
         .MOUSE_DOWN => {
-            switch (event.mouse_button) {
-                .LEFT => {
-                    state.sendWorkerThreadQueue.enqueue(.{
-                        .SetBlock = .{
-                            .pos = state.selector.pos,
-                            .block = .{
-                                .id = .Air,
+            if (sapp.mouseLocked()) {
+                switch (event.mouse_button) {
+                    .LEFT => {
+                        state.sendWorkerThreadQueue.enqueue(.{
+                            .SetBlock = .{
+                                .pos = state.selector.pos,
+                                .block = .{
+                                    .id = .Air,
+                                },
                             },
-                        },
-                    }) catch {
-                        std.log.err("Failed to set block to air", .{});
-                    };
-                },
-                .RIGHT => {
-                    state.sendWorkerThreadQueue.enqueue(.{
-                        .SetBlock = .{
-                            .pos = state.selector.pos,
-                            .block = .{
-                                .id = @enumFromInt(state.selectedBlock),
+                        }) catch {
+                            std.log.err("Failed to set block to air", .{});
+                        };
+                    },
+                    .RIGHT => {
+                        state.sendWorkerThreadQueue.enqueue(.{
+                            .SetBlock = .{
+                                .pos = state.selector.place_pos,
+                                .block = .{
+                                    .id = @enumFromInt(state.selectedBlock),
+                                },
                             },
-                        },
-                    }) catch {
-                        std.log.err("Failed to set block ", .{});
-                    };
-                },
-                else => {},
+                        }) catch {
+                            std.log.err("Failed to set block ", .{});
+                        };
+                    },
+                    else => {},
+                }
             }
         },
         .MOUSE_MOVE => {
