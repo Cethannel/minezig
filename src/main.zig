@@ -10,8 +10,6 @@ const sdtx = sokol.debugtext;
 
 const clayRender = @import("clay_render.zig");
 
-const extism = @import("extism");
-
 const util = @import("utils.zig");
 const workerThread = @import("workerThread.zig");
 

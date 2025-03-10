@@ -1,8 +1,6 @@
 const std = @import("std");
 const Build = std.Build;
 
-const extism = @import("extism");
-
 const textures = @import("src/textures.zig");
 
 // Although this function looks imperative, note that its job is to
@@ -58,17 +56,15 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .link_libc = true,
+        //.link_libc = true,
     });
-
-    extism.addLibrary(exe, b);
 
     if (target.result.os.tag == .windows) {
         controllerSupport = false;
     }
 
     addControllerSupport(b, target, exe, controllerSupport);
-    addWasmSupport(b, target, exe);
+    //addWasmSupport(b, target, exe);
 
     const imports = [_]struct {
         name: []const u8,
@@ -150,8 +146,6 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    extism.addLibrary(exe_unit_tests, b);
-
     addControllerSupport(b, target, exe_unit_tests, controllerSupport);
 
     for (imports) |import| {

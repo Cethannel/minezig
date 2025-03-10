@@ -301,10 +301,18 @@ pub fn MultiArray(comptime T: type, comptime len: usize) type {
     };
 }
 
-pub fn getFieldOrNull(value: anytype, comptime field: blk: {
-    const vT: type = @TypeOf(value);
-    assert(@typeInfo(vT) == .optional, "Value must be an optional");
-    const ti = @typeInfo(@typeInfo(vT).optional.child);
+pub fn getFieldOrNull(
+    value: anytype,
+    comptime field: getFieldEnum(@TypeOf(value)),
+) ?@FieldType(@TypeOf(value), @tagName(field)) {
+    if (value) |iV| {
+        return @field(iV, @tagName(field));
+    }
+    return null;
+}
+
+pub fn getFieldEnum(comptime T: type) type {
+    const ti = @typeInfo(T);
     switch (ti) {
         .@"struct" => |s| {
             var fields: [s.fields.len]std.builtin.Type.EnumField = undefined;
@@ -313,7 +321,7 @@ pub fn getFieldOrNull(value: anytype, comptime field: blk: {
                 fields[i].name = fld.name;
             }
             var decls: [0]std.builtin.Type.Declaration = .{};
-            break :blk @Type(std.builtin.Type{
+            return @Type(std.builtin.Type{
                 .@"enum" = std.builtin.Type.Enum{
                     .fields = fields[0..],
                     .decls = decls[0..],
@@ -322,15 +330,13 @@ pub fn getFieldOrNull(value: anytype, comptime field: blk: {
                 },
             });
         },
+        .optional => |opt| {
+            return getFieldEnum(opt.child);
+        },
         else => {
             @compileError("Unsupported type: " ++ @tagName(ti));
         },
     }
-}) ?@FieldType(@TypeOf(value), @tagName(field)) {
-    if (value) |iV| {
-        return @field(iV, @tagName(field));
-    }
-    return null;
 }
 
 test "MultiArray" {

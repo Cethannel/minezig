@@ -24,24 +24,20 @@
             .hash = "zigimg-0.1.0-meDTrz9eEAA9BebDVEhuvbV1spX1NWa3BxyQrvzxrTXV",
         },
         .zlm = .{
-            .url = "git+https://github.com/Cethannel/zlm#75f7f60c3ea212cbda2d0941c968cded692bbf0a",
-            .hash = "12207c4015ee2d8352879e0950f644595e1082e6606db3ca2f88db54e74d8fb11e2f",
-        },
-        .zgui = .{
-            .url = "git+https://github.com/zig-gamedev/zgui.git#5f0e01e8cd7f423a27ad56a712e9770a81d5d272",
-            .hash = "zgui-0.6.0-dev-AAAAAA7MawCe458R1hAPhLhIhYtASPII9w4GCRzPYDh5",
+            .url = "git+https://github.com/Cethannel/zlm#340617d6d62088a0f7101fe19a53c73395ee8b0e",
+            .hash = "zlm-0.1.0-2FyqUG2lAADCmyNMKbEICc9hdHAM3lOr_qPGmEY12wiA",
         },
         .cimgui = .{
             .url = "git+https://github.com/floooh/dcimgui.git#387dd2b3dcbb3380ad35b8efa54624564ecfd759",
             .hash = "cimgui-0.1.0-44ClkVShhQApVaApfb_mhXPpp08yqiB3zIBR0WYjbwwI",
         },
         .extism = .{
-            .url = "git+https://github.com/extism/zig-sdk.git?ref=v1.1.0#b905120fa432cc6eb36f8137425020095c3fc58b",
-            .hash = "1220240864011f25d41c58e15db84cb5621dc9effa2bdd51165ec6882147dcacc26b",
+            .url = "git+https://github.com/Cethannel/zig-sdk.git#3d8c8026d4d8e82458ad80437d62a57014f72d1f",
+            .hash = "extism-1.0.0-rc2-V9UAzgaeHABw5u7B9ooEopLioGovN5xsM97aaMydd3Hi",
         },
         .zclay = .{
-            .url = "git+https://github.com/johan0A/clay-zig-bindings.git#c26ef9d4b6b591caeb1750869abcdc50446b33c1",
-            .hash = "12200ea1ea60ded00ab2c4026dd1161d61193965467c4874daefa7b7bc94da9ce687",
+            .url = "git+https://github.com/johan0A/clay-zig-bindings.git#c439f254d974d4235be27157e530836e854d312c",
+            .hash = "zclay-0.0.0-Ej1rkMHHAABluPgeTKZu3gBCSkDfD1NYXsUbEvJZ6kYL",
         },
     },
     .paths = .{
