@@ -369,13 +369,6 @@ pub const Chunk = struct {
             }
         }
 
-        if (solid_indices.items.len == 0 //
-        and solid_vertices.items.len == 0 //
-        and transparent_vertices.items.len == 0 //
-        and transparent_indices.items.len == 0) {
-            std.log.info("Empty chunk: {any}", .{self.blocks});
-        }
-
         vertexCount += solid_vertices.items.len;
         chunkCount += 1;
 
@@ -424,13 +417,24 @@ const Sides = struct {
 
 pub const ChunkMap = struct {
     map: std.AutoHashMap(IVec3, RenderChunk),
+    chunkGenFuncs: std.ArrayList(ChunkGenFunc),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub const ChunkGenFunc = *const fn (chunk: *Chunk, pos: IVec3) callconv(.C) void;
+
+    pub fn init(allocator: std.mem.Allocator) !Self {
+        var chunkGenFuncs: std.ArrayList(ChunkGenFunc) = .init(allocator);
+        errdefer chunkGenFuncs.deinit();
+
+        try chunkGenFuncs.append(&genTerrain);
+        try chunkGenFuncs.append(&genWater);
+        try chunkGenFuncs.append(&propGrass);
+
         return .{
             .map = std.AutoHashMap(IVec3, RenderChunk).init(allocator),
+            .chunkGenFuncs = chunkGenFuncs,
             .allocator = allocator,
         };
     }
@@ -461,27 +465,13 @@ pub const ChunkMap = struct {
     }
 
     pub fn genChunk(self: *Self, chunkPos: IVec3) !void {
-        const chunk = Chunk.gen_chunk(chunkPos);
+        var chunk = Chunk.AllAir;
+
+        for (self.chunkGenFuncs.items) |func| {
+            func(&chunk, chunkPos);
+        }
 
         try self.put(chunkPos, chunk);
-
-        //inline for (0..2) |ix| {
-        //    inline for (0..2) |iz| {
-        //        const x: i64 = @as(i64, @intCast(ix)) - 1;
-        //        const z: i64 = @as(i64, @intCast(iz)) - 1;
-        //        if (@abs(x) == @abs(z)) {
-        //            continue;
-        //        }
-
-        //        const offset = IVec3.new(x, 0, z);
-
-        //        if (self.map.get(chunkPos.add(offset))) |rChunk| {
-        //            if (rChunk.solid_mesh != null or rChunk.transparent_mesh != null) {
-        //                try state.genChunkMeshQueue.enqueue(chunkPos.add(offset));
-        //            }
-        //        }
-        //    }
-        //}
     }
 
     pub fn contains(self: *const Self, pos: IVec3) bool {
@@ -557,6 +547,7 @@ pub const ChunkMap = struct {
         }
 
         self.map.deinit();
+        self.chunkGenFuncs.deinit();
     }
 
     noinline fn genNeigbors(self: *const @This(), chunkPos: IVec3) Sides {
@@ -649,38 +640,50 @@ pub const RenderChunk = struct {
     pub fn render(self: *const @This(), pos: *const IVec3) void {
         const cMesh: ?Mesh = self.solid_mesh;
         if (cMesh) |mesh| {
-            state.bind.vertex_buffers[0] = mesh.vertexBuffer;
-            state.bind.index_buffer = mesh.indexBuffer;
+            if (mesh.buffers) |buffs| {
+                state.bind.vertex_buffers[0] = buffs.vertexBuffer;
+                state.bind.index_buffer = buffs.indexBuffer;
 
-            sg.applyBindings(state.bind);
-            const vs_params = shd.VsParams{
-                .mvp = root.computeVsParams(
-                    @floatFromInt(pos.x * 16),
-                    @floatFromInt(pos.y * 16),
-                    @floatFromInt(pos.z * 16),
-                ),
-            };
-            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-            sg.draw(0, @intCast(mesh.indices.items.len), 1);
+                sg.applyBindings(state.bind);
+                const vs_params = shd.VsParams{
+                    .mvp = root.computeVsParams(
+                        @floatFromInt(pos.x * 16),
+                        @floatFromInt(pos.y * 16),
+                        @floatFromInt(pos.z * 16),
+                    ),
+                };
+                sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+                sg.draw(0, @intCast(mesh.indices.items.len), 1);
+            }
         }
     }
 
     pub fn renderTransparent(self: *const @This(), pos: *const IVec3) void {
         const cMesh: ?Mesh = self.transparent_mesh;
         if (cMesh) |mesh| {
-            state.bind.vertex_buffers[0] = mesh.vertexBuffer;
-            state.bind.index_buffer = mesh.indexBuffer;
+            if (mesh.buffers) |buffs| {
+                state.bind.vertex_buffers[0] = buffs.vertexBuffer;
+                state.bind.index_buffer = buffs.indexBuffer;
 
-            sg.applyBindings(state.bind);
-            const vs_params = shd.VsParams{
-                .mvp = root.computeVsParams(
-                    @floatFromInt(pos.x * 16),
-                    @floatFromInt(pos.y * 16),
-                    @floatFromInt(pos.z * 16),
-                ),
-            };
-            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-            sg.draw(0, @intCast(mesh.indices.items.len), 1);
+                sg.applyBindings(state.bind);
+                const vs_params = shd.VsParams{
+                    .mvp = root.computeVsParams(
+                        @floatFromInt(pos.x * 16),
+                        @floatFromInt(pos.y * 16),
+                        @floatFromInt(pos.z * 16),
+                    ),
+                };
+                sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+                sg.draw(0, @intCast(mesh.indices.items.len), 1);
+            }
+        }
+    }
+
+    pub fn hookupBuffers(self: *@This()) void {
+        inline for (mesh_variants) |value| {
+            if (@field(self, value ++ "_mesh")) |*msh| {
+                msh.hookupBuffers();
+            }
         }
     }
 };
@@ -688,15 +691,39 @@ pub const RenderChunk = struct {
 pub const Mesh = struct {
     vertices: std.ArrayList(root.Vertex),
     indices: std.ArrayList(u32),
-    vertexBuffer: sg.Buffer,
-    indexBuffer: sg.Buffer,
+    buffers: ?struct {
+        vertexBuffer: sg.Buffer,
+        indexBuffer: sg.Buffer,
+    },
 
     pub fn deinit(self: *@This()) void {
-        sg.destroyBuffer(self.vertexBuffer);
-        sg.destroyBuffer(self.indexBuffer);
+        if (self.buffers) |buffs| {
+            sg.destroyBuffer(buffs.vertexBuffer);
+            sg.destroyBuffer(buffs.indexBuffer);
+        }
 
         self.vertices.deinit();
         self.indices.deinit();
+    }
+
+    pub fn hookupBuffers(self: *@This()) void {
+        if (self.buffers) |buffs| {
+            sg.destroyBuffer(buffs.vertexBuffer);
+            sg.destroyBuffer(buffs.indexBuffer);
+        }
+
+        const vertexBuffer = sg.makeBuffer(.{
+            .data = sg.asRange(self.vertices.items),
+        });
+        const indexBuffer = sg.makeBuffer(.{
+            .type = .INDEXBUFFER,
+            .data = sg.asRange(self.indices.items),
+        });
+
+        self.buffers = .{
+            .vertexBuffer = vertexBuffer,
+            .indexBuffer = indexBuffer,
+        };
     }
 };
 
@@ -757,6 +784,11 @@ pub fn renderDistanceGen() !void {
     const chunkPos: IVec3 = getPlayerChunkPos();
     const dist2: u32 = @as(u32, @intCast(state.renderDistance)) * state.renderDistance;
 
+    var chunkIter = state.chunkMap.map.keyIterator();
+    while (chunkIter.next()) |toGenPos| {
+        try outRangeDel(chunkPos, toGenPos.*, dist2);
+    }
+
     for (0..(state.renderDistance + 2) * 2) |dx| {
         for (0..(state.renderDistance + 2) * 2) |dz| {
             const toGenPos = IVec3.new(
@@ -766,7 +798,6 @@ pub fn renderDistanceGen() !void {
             );
 
             try inRangeGen(chunkPos, toGenPos, dist2);
-            try outRangeDel(chunkPos, toGenPos, dist2);
         }
     }
 }
@@ -912,4 +943,189 @@ test "GenNeighbors" {
     };
 
     try std.testing.expectEqualDeep(expected, neihbors);
+}
+
+fn genTerrain(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
+    const noise = fastnoise.Noise(f32){
+        .seed = state.seed,
+        .noise_type = .perlin,
+    };
+
+    const stoneId = Blocks.getBlockId("stone").?;
+
+    const chunkGlobalPos = chunkToWorldPos(chunkPos);
+
+    for (0..chunkWidth) |x| {
+        for (0..chunkWidth) |z| {
+            const fx: f32 = @floatFromInt(x);
+            const fz: f32 = @floatFromInt(z);
+            const height = noise.genNoise2D(chunkGlobalPos.x + fx, chunkGlobalPos.z + fz);
+            for (0..chunkHeight) |y| {
+                const fy: f32 = @floatFromInt(y);
+
+                const ny: f32 = (fy - fHalfChunkHeight) / fHalfChunkHeight;
+
+                const dy = ny - height;
+
+                if (dy < -0.1) {
+                    chunk.blocks[x][y][z].id = stoneId;
+                }
+            }
+        }
+    }
+}
+
+const waterHeight = 128;
+
+comptime {
+    if (waterHeight > chunkHeight) {
+        @compileError("WaterHeight should be less than chunkHeight");
+    }
+}
+
+fn genWater(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
+    _ = chunkPos;
+
+    const waterId = Blocks.getBlockId("water").?;
+
+    for (0..chunkWidth) |x| {
+        for (0..chunkWidth) |z| {
+            for (1..waterHeight + 1) |neg_y| {
+                const y = waterHeight - neg_y;
+                if (chunk.blocks[x][y][z].id == .Air) {
+                    chunk.blocks[x][y][z] = .{
+                        .id = waterId,
+                    };
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn propGrass(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
+    _ = chunkPos;
+
+    const grassId = Blocks.getBlockId("grass").?;
+    const dirtId = Blocks.getBlockId("dirt").?;
+    const stoneId = Blocks.getBlockId("stone").?;
+
+    const dirtDepth = 3;
+
+    for (0..chunkWidth) |x| {
+        for (0..chunkWidth) |z| {
+            for (1..chunkHeight + 1) |neg_y| {
+                const y = chunkHeight - neg_y;
+                const block = &chunk.blocks[x][y][z];
+                if (block.id != .Air and block.id != stoneId) {
+                    break;
+                }
+
+                if (block.id == stoneId) {
+                    block.* = .{ .id = grassId };
+
+                    for (1..dirtDepth + 1) |dy| {
+                        if (y - dy < 0) {
+                            break;
+                        }
+                        chunk.blocks[x][y - dy][z] = .{ .id = dirtId };
+                    }
+                    break;
+                }
+            }
+        }
+    }
+}
+
+pub const NeighborChunks = struct {
+    x: ?Chunk = null,
+    neg_x: ?Chunk = null,
+    z: ?Chunk = null,
+    neg_z: ?Chunk = null,
+};
+
+pub fn genMeshSides(
+    chunk: Chunk,
+    pos: IVec3,
+    neighbors: NeighborChunks,
+) !void {
+    var out: Sides = undefined;
+
+    inline for ([_][]const u8{ "x", "z" }) |dir| {
+        inline for ([_]i64{ 1, -1 }) |offset| {
+            var offsetVec = IVec3.zero;
+            @field(offsetVec, dir) = offset;
+            var inChunkOffsetVec = zlm.SpecializeOn(usize).Vec3.zero;
+            @field(inChunkOffsetVec, dir) = @abs((offset - 1) / 2) * (chunkWidth - 1);
+            var dirMulti = zlm.SpecializeOn(usize).Vec3.one;
+            @field(dirMulti, dir) = 0;
+
+            const start = if (offset == 1) "" else "neg_";
+
+            if (@field(neighbors, start ++ dir)) |neibor| {
+                var side = &@field(out, dir);
+                if (offset == -1) {
+                    side = &@field(out, "neg_" ++ dir);
+                }
+                for (0..chunkWidth) |i| {
+                    for (0..chunkHeight) |y| {
+                        side[i][y] = neibor.blocks //
+                        [dirMulti.x * i + inChunkOffsetVec.x] //
+                            [dirMulti.y * y + inChunkOffsetVec.y] //
+                            [dirMulti.z * i + inChunkOffsetVec.z];
+                    }
+                }
+            } else {
+                if (offset == 1) {
+                    @field(out, dir) = @field(Sides.AllAir, "neg_" ++ dir);
+                } else if (offset == -1) {
+                    @field(out, "neg_" ++ dir) = @field(Sides.AllAir, dir);
+                }
+            }
+        }
+    }
+
+    const meshData = try chunk.gen_mesh(out, state.allocator);
+
+    var rChunk = RenderChunk{
+        .chunk = chunk,
+        .solid_mesh = null,
+        .transparent_mesh = null,
+    };
+
+    inline for (mesh_variants) |variant| {
+        const data: Chunk.MeshData = @field(meshData, variant);
+        errdefer data.indices.deinit();
+        errdefer data.vertices.deinit();
+
+        if (data.indices.items.len == 0 or data.vertices.items.len == 0) {
+            data.indices.deinit();
+            data.vertices.deinit();
+        } else {
+            const vertexBuffer = sg.makeBuffer(.{
+                .data = sg.asRange(data.vertices.items),
+            });
+            const indexBuffer = sg.makeBuffer(.{
+                .type = .INDEXBUFFER,
+                .data = sg.asRange(data.indices.items),
+            });
+
+            const mesh = Mesh{
+                .vertices = data.vertices,
+                .indices = data.indices,
+                .buffers = .{
+                    .vertexBuffer = vertexBuffer,
+                    .indexBuffer = indexBuffer,
+                },
+            };
+
+            @field(rChunk, variant ++ "_mesh") = mesh;
+        }
+    }
+
+    try state.recvChunkMeshQueue.enqueue(.{
+        .pos = pos,
+        .rc = rChunk,
+    });
 }

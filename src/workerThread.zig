@@ -29,7 +29,7 @@ pub const fromWorkerThreadMessage = union(enum) {
 var blockUpdateQueue: utils.mspc(utils.IVec3) = undefined;
 
 pub fn workerThread() void {
-    var chunkMap = chunks.ChunkMap.init(state.allocator);
+    var chunkMap = chunks.ChunkMap.init(state.allocator) catch unreachable;
     var playerPos: ?zlm.Vec3 = null;
     defer chunkMap.deinit();
     blockUpdateQueue = utils.mspc(utils.IVec3).init(state.allocator, 128) catch unreachable;

@@ -301,6 +301,38 @@ pub fn MultiArray(comptime T: type, comptime len: usize) type {
     };
 }
 
+pub fn getFieldOrNull(value: anytype, comptime field: blk: {
+    const vT: type = @TypeOf(value);
+    assert(@typeInfo(vT) == .optional, "Value must be an optional");
+    const ti = @typeInfo(@typeInfo(vT).optional.child);
+    switch (ti) {
+        .@"struct" => |s| {
+            var fields: [s.fields.len]std.builtin.Type.EnumField = undefined;
+            for (s.fields, 0..) |fld, i| {
+                fields[i].value = i;
+                fields[i].name = fld.name;
+            }
+            var decls: [0]std.builtin.Type.Declaration = .{};
+            break :blk @Type(std.builtin.Type{
+                .@"enum" = std.builtin.Type.Enum{
+                    .fields = fields[0..],
+                    .decls = decls[0..],
+                    .tag_type = u32,
+                    .is_exhaustive = true,
+                },
+            });
+        },
+        else => {
+            @compileError("Unsupported type: " ++ @tagName(ti));
+        },
+    }
+}) ?@FieldType(@TypeOf(value), @tagName(field)) {
+    if (value) |iV| {
+        return @field(iV, @tagName(field));
+    }
+    return null;
+}
+
 test "MultiArray" {
     var mArr = MultiArray(struct {
         x: u32,

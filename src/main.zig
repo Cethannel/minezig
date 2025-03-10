@@ -105,6 +105,8 @@ const State = struct {
     sendWorkerThreadQueue: util.mspc(workerThread.toWorkerThreadMessage) = undefined,
     recvWorkerThreadQueue: util.mspc(workerThread.fromWorkerThreadMessage) = undefined,
 
+    recvChunkMeshQueue: util.mspc(struct { rc: chunks.RenderChunk, pos: IVec3 }) = undefined,
+
     chunksInFlightSet: chunksInFlightT = undefined,
 
     blocksArr: std.ArrayList(blocks.Block) = undefined,
@@ -270,9 +272,11 @@ fn init() callconv(.C) void {
     state.recvWorkerThreadQueue = util.mspc(workerThread.fromWorkerThreadMessage) //
         .init(state.allocator, 1024) catch unreachable;
 
+    state.recvChunkMeshQueue = @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 1024) catch unreachable;
+
     state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
 
-    state.chunkMap = chunks.ChunkMap.init(state.allocator);
+    state.chunkMap = chunks.ChunkMap.init(state.allocator) catch unreachable;
     state.chunkMap.map.ensureTotalCapacity(32 * 32) catch unreachable;
 
     state.pass_action.colors[0] = .{
@@ -418,6 +422,21 @@ noinline fn recvWorker() !void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
+                var neighbors: chunks.NeighborChunks = .{};
+                inline for ([_][]const u8{ "x", "z" }) |dir| {
+                    inline for ([_]i64{ 1, -1 }) |offset| {
+                        var offsetVec = IVec3.zero;
+                        @field(offsetVec, dir) = offset;
+                        const rChunk = state.chunkMap.get(nc.pos.add(offsetVec));
+                        const chunk: ?chunks.Chunk = util.getFieldOrNull(rChunk, .chunk);
+                        if (offset == 1) {
+                            @field(neighbors, dir) = chunk;
+                        }
+                        if (offset == -1) {
+                            @field(neighbors, "neg_" ++ dir) = chunk;
+                        }
+                    }
+                }
                 try state.chunkMap.put(nc.pos, nc.chunk);
                 try state.chunkMap.regenNeighborMeshes(nc.pos);
                 try state.genChunkMeshQueue.enqueue(nc.pos);
@@ -428,7 +447,39 @@ noinline fn recvWorker() !void {
 
 noinline fn genMeshes() !void {
     while (state.genChunkMeshQueue.dequeue()) |chunkPos| {
-        try state.chunkMap.genMesh(chunkPos);
+        var neighbors: chunks.NeighborChunks = .{};
+        inline for ([_][]const u8{ "x", "z" }) |dir| {
+            inline for ([_]i64{ 1, -1 }) |offset| {
+                var offsetVec = IVec3.zero;
+                @field(offsetVec, dir) = offset;
+                const rChunk = state.chunkMap.get(chunkPos.add(offsetVec));
+                const chunk: ?chunks.Chunk = util.getFieldOrNull(rChunk, .chunk);
+                if (offset == 1) {
+                    @field(neighbors, dir) = chunk;
+                }
+                if (offset == -1) {
+                    @field(neighbors, "neg_" ++ dir) = chunk;
+                }
+            }
+        }
+        const chunk = state.chunkMap.get(chunkPos).?.chunk;
+        const thread = try std.Thread.spawn(.{}, chunks.genMeshSides, .{
+            chunk,
+            chunkPos,
+            neighbors,
+        });
+        thread.detach();
+        //try state.chunkMap.genMesh(chunkPos);
+    }
+
+    while (state.recvChunkMeshQueue.dequeue()) |rchunkthing| {
+        var oldChunk = state.chunkMap.get(rchunkthing.pos);
+        if (oldChunk) |*oc| {
+            oc.deinit();
+        }
+        var rChunk = rchunkthing.rc;
+        rChunk.hookupBuffers();
+        try state.chunkMap.map.put(rchunkthing.pos, rChunk);
     }
 }
 
