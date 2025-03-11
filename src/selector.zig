@@ -16,6 +16,8 @@ const zlm = @import("zlm");
 
 const izlm = zlm.SpecializeOn(i64);
 
+const blocks = @import("blocks.zig");
+
 pub const IVec3 = izlm.Vec3;
 
 pub const Vertex = extern struct {
@@ -143,6 +145,8 @@ pub const Selector = struct {
             @field(dirfrac, field.name) = 1.0 / @field(state.cameraFront, field.name);
         }
 
+        var boundsSel: blocks.Bounds = .{ .min = .zero, .max = .one };
+
         inline for ([3]comptime_int{ 0, -1, 1 }) |chunkX| {
             inline for ([3]comptime_int{ 0, -1, 1 }) |chunkZ| {
                 const pos = chunks.worldToChunkPos(state.cameraPos.add(zlm.Vec3.new(16 * chunkX, 0, 16 * chunkZ)));
@@ -152,15 +156,21 @@ pub const Selector = struct {
                         for (slice, 0..) |column, y| {
                             for (column, 0..) |block, z| {
                                 if (block.id != .Air) {
-                                    const blockPos = zlm.vec3(
+                                    const b = blocks.getBlockFromId(block.id).?;
+
+                                    const bounds = b.bounds(.{
+                                        .selfBlock = block,
+                                    });
+                                    var blockPos = zlm.vec3(
                                         @floatFromInt(x),
                                         @floatFromInt(y),
                                         @floatFromInt(z),
-                                    ).add(chunks.chunkToWorldPos(pos.chunkPos));
+                                    ).add(chunks.chunkToWorldPos(pos.chunkPos))
+                                        .add(bounds.min);
 
                                     // FIXME: I don't think this works for negative chunks
 
-                                    const blockMaxPos = blockPos.add(zlm.Vec3.one);
+                                    const blockMaxPos = blockPos.add(bounds.max);
 
                                     const intersects = self.intersectAABB(state.cameraPos, dirfrac, blockPos, blockMaxPos);
 
@@ -169,6 +179,7 @@ pub const Selector = struct {
                                             found = true;
                                             self.last_t = self.t;
                                             self.pos = iVecFromVec3(blockPos);
+                                            boundsSel = bounds;
                                         }
                                     }
                                 }
@@ -191,7 +202,7 @@ pub const Selector = struct {
                     if (@abs(x) + @abs(y) + @abs(z) != 1) {
                         continue;
                     }
-                    const blockPos = vecFromIVec3(self.pos).add(zlm.vec3(x, y, z));
+                    const blockPos = vecFromIVec3(self.pos).add(zlm.vec3(x, y, z).mul(boundsSel.max));
                     const blockMaxPos = blockPos.add(zlm.Vec3.one);
 
                     const intersects = self.intersectAABB(

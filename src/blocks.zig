@@ -26,14 +26,25 @@ pub const BlockUpdateParams = extern struct {
 };
 
 pub const GenVerticesSidesParams = extern struct {
-    side: usize,
+    side: SideEnum,
     pos: zlm.Vec3,
     selfBlock: chunks.Block,
     neighbors: chunks.NeighborBlock,
 };
 
 pub const ShouldGenerateSidePrams = extern struct {
-    neighbor: Block,
+    selfBlock: chunks.Block,
+    neighbor: chunks.Block,
+    side: SideEnum,
+};
+
+pub const SideEnum = enum(usize) {
+    NegZ = 0,
+    Z = 1,
+    NegX = 2,
+    X = 3,
+    NegY = 4,
+    Y = 5,
 };
 
 pub const Bounds = extern struct {
@@ -50,6 +61,15 @@ pub const Bounds = extern struct {
         }
         return true;
     }
+
+    pub fn eqlDir(self: Self, other: Self, comptime field: utils.getFieldEnum(zlm.Vec3)) bool {
+        return @field(self.min, @tagName(field)) == @field(other.min, @tagName(field)) and
+            @field(self.max, @tagName(field)) == @field(other.max, @tagName(field));
+    }
+};
+
+pub const BoundsParams = extern struct {
+    selfBlock: chunks.Block,
 };
 
 pub const Block = extern struct {
@@ -80,6 +100,7 @@ pub const Block = extern struct {
 
     pub const boundsFn = *const fn (
         self: *const anyopaque,
+        params: *const BoundsParams,
         bound_out: *Bounds,
     ) callconv(.C) void;
 
@@ -127,9 +148,9 @@ pub const Block = extern struct {
         }
     }
 
-    pub inline fn bounds(self: *const @This()) Bounds {
+    pub inline fn bounds(self: *const @This(), params: BoundsParams) Bounds {
         var out: Bounds = undefined;
-        self.inner_bounds(self.inner, &out);
+        self.inner_bounds(self.inner, &params, &out);
         return out;
     }
 
@@ -406,11 +427,13 @@ pub const Cube = struct {
 
     pub fn bounds(
         self: *const Self,
+        params: *const BoundsParams,
         bound_out: *Bounds,
     ) callconv(.C) void {
         _ = self;
+        _ = params;
         bound_out.min = zlm.Vec3.zero;
-        bound_out.min = zlm.Vec3.one;
+        bound_out.max = zlm.Vec3.one;
     }
 
     pub fn gen_vertices_sides(
@@ -418,23 +441,21 @@ pub const Cube = struct {
         params: *const GenVerticesSidesParams,
         out: *utils.MultiArray(root.Vertex, 4),
     ) callconv(.C) bool {
-        //var out: [4]root.Vertex = undefined;
-
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
             .TopOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (params.side == 5) {
+                if (params.side == .Y) {
                     texName = topOthers.top;
                 }
                 break :swi texName;
             },
             .TopBotOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (params.side == 5) {
+                if (params.side == .Y) {
                     texName = topOthers.top;
                 }
-                if (params.side == 4) {
+                if (params.side == .NegY) {
                     texName = topOthers.bot;
                 }
                 break :swi texName;
@@ -480,7 +501,7 @@ pub const Cube = struct {
 };
 
 fn gen_vertices_sides_from_base(
-    side: usize,
+    side: SideEnum,
     pos: zlm.Vec3,
     out: *utils.MultiArray(root.Vertex, 4),
     baseVerts: []const root.Vertex,
@@ -494,7 +515,7 @@ fn gen_vertices_sides_from_base(
     const textureOffset = @as(f32, @floatFromInt(texture)) * invNumIndices;
 
     for (0..4) |i| {
-        const base = &baseVerts[side * 4 + i];
+        const base = &baseVerts[@intFromEnum(side) * 4 + i];
         var newVertex: root.Vertex = undefined;
         newVertex.pos = base.pos.mul(sideScale).add(pos);
 
@@ -502,7 +523,7 @@ fn gen_vertices_sides_from_base(
 
         newVertex.u = base.u;
         newVertex.v = base.v * invNumIndices;
-        if (side != 4 and side != 5) {
+        if (side != .Y and side != .NegY) {
             newVertex.v *= sideScale.y;
         }
         newVertex.v += textureOffset;
@@ -552,10 +573,15 @@ pub const Slab = struct {
 
     pub fn bounds(
         self: *const Self,
+        params: *const BoundsParams,
         bound_out: *Bounds,
     ) callconv(.C) void {
         _ = self;
         bound_out.* = innerBounds;
+        if (params.selfBlock.variant == 1) {
+            bound_out.min.y += 0.5;
+            bound_out.max.y += 0.5;
+        }
     }
 
     pub fn gen_vertices_sides(
@@ -567,17 +593,17 @@ pub const Slab = struct {
             .All => |all| all,
             .TopOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (params.side == 5) {
+                if (params.side == .Y) {
                     texName = topOthers.top;
                 }
                 break :swi texName;
             },
             .TopBotOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (params.side == 5) {
+                if (params.side == .Y) {
                     texName = topOthers.top;
                 }
-                if (params.side == 4) {
+                if (params.side == .NegY) {
                     texName = topOthers.bot;
                 }
                 break :swi texName;
@@ -592,6 +618,38 @@ pub const Slab = struct {
             &texInfo,
             zlm.Vec3.new(1.0, 0.5, 1.0),
         );
+    }
+
+    pub fn should_generate_side(
+        self: *const Self,
+        params: *const ShouldGenerateSidePrams,
+    ) callconv(.C) bool {
+        const neighborBlock = getBlockFromId(params.neighbor.id);
+        switch (params.side) {
+            .Y => {
+                return true;
+            },
+            .NegY => {
+                if (neighborBlock) |nb| {
+                    return nb.bounds(.{ .selfBlock = params.neighbor }).max.y != 1.0;
+                }
+            },
+            else => {
+                if (params.neighbor.id == .Air) {
+                    return true;
+                }
+                if (neighborBlock) |nb| {
+                    var selfBound: Bounds = undefined;
+                    self.bounds(&.{
+                        .selfBlock = params.selfBlock,
+                    }, &selfBound);
+                    if (nb.bounds(.{ .selfBlock = params.neighbor }).eql(selfBound)) {
+                        return false;
+                    }
+                }
+            },
+        }
+        return true;
     }
 
     pub fn deinit(self: *Self) callconv(.C) void {
@@ -830,8 +888,10 @@ pub const Air = struct {
 
     pub fn bounds(
         self: *const Self,
+        params: *const BoundsParams,
         out_bounds: *Bounds,
     ) callconv(.C) void {
+        _ = params;
         _ = self;
         _ = out_bounds;
         @panic("Called bounds for air");
@@ -897,8 +957,10 @@ pub const Fluid = struct {
 
     pub fn bounds(
         self: *const Self,
+        params: *const BoundsParams,
         bound_out: *Bounds,
     ) callconv(.C) void {
+        _ = params;
         _ = self;
         bound_out.* = innerBounds;
     }
@@ -912,17 +974,17 @@ pub const Fluid = struct {
             .All => |all| all,
             .TopOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (params.side == 5) {
+                if (params.side == .Y) {
                     texName = topOthers.top;
                 }
                 break :swi texName;
             },
             .TopBotOthers => |topOthers| {
                 var texName = topOthers.other;
-                if (params.side == 5) {
+                if (params.side == .Y) {
                     texName = topOthers.top;
                 }
-                if (params.side == 4) {
+                if (params.side == .NegY) {
                     texName = topOthers.bot;
                 }
                 break :swi texName;

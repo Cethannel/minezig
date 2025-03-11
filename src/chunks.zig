@@ -39,8 +39,11 @@ pub const BlockId = enum(u32) {
     _,
 };
 
+pub const BlockVariant = u8;
+
 pub const Block = extern struct {
     id: BlockId,
+    variant: BlockVariant = 0,
 
     const Self = @This();
 
@@ -293,7 +296,7 @@ pub const Chunk = struct {
                                 else => @panic("Index should not excede 5"),
                             }
 
-                            if (should_skip_side(&block, neighborBlock)) {
+                            if (should_skip_side(&block, neighborBlock, @enumFromInt(index1))) {
                                 continue :face;
                             }
 
@@ -302,7 +305,7 @@ pub const Chunk = struct {
                             const indexOffset = if (blockStruct.transparent) transparent_maxOffset else solid_maxOffset;
                             const vert = try state.blocksArr.items[@intFromEnum(block.id)].gen_vertices_sides(
                                 .{
-                                    .side = index1,
+                                    .side = @enumFromInt(index1),
                                     .pos = zlm.vec3(
                                         @floatFromInt(x),
                                         @floatFromInt(y),
@@ -885,6 +888,7 @@ fn acount_for_negatives(input: IVec3) IVec3 {
 fn should_skip_side(
     block: *const Block,
     neighbor: *const Block,
+    side: Blocks.SideEnum,
 ) bool {
     if (neighbor.id == .Air) {
         return false;
@@ -893,21 +897,37 @@ fn should_skip_side(
     const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
     const neighborStruct = state.blocksArr.items[@intFromEnum(neighbor.id)];
 
-    if (!blockStruct.transparent and neighborStruct.transparent) {
+    if (blockStruct.transparent != neighborStruct.transparent) {
         return false;
     }
 
     if (blockStruct.should_generate_side(.{
-        .neighbor = neighborStruct,
+        .neighbor = neighbor.*,
+        .selfBlock = block.*,
+        .side = side,
     })) |shouldGen| {
-        return shouldGen;
+        return !shouldGen;
     }
 
-    const blockBounds = blockStruct.bounds();
-    const neighborBounds = neighborStruct.bounds();
+    const blockBounds = blockStruct.bounds(.{ .selfBlock = block.* });
+    const neighborBounds = neighborStruct.bounds(.{ .selfBlock = neighbor.* });
 
-    if (!blockBounds.eql(neighborBounds)) {
-        return false;
+    switch (side) {
+        .Z, .NegZ, .X, .NegX => {
+            if (blockBounds.eqlDir(neighborBounds, .y)) {
+                return true;
+            } else {
+                std.log.info("Block: {any}", .{blockBounds});
+                std.log.info("Neighbor: {any}", .{neighborBounds});
+                return false;
+            }
+        },
+        .NegY => {
+            if (neighborBounds.max.y < 1.0) {
+                return false;
+            }
+        },
+        else => {},
     }
 
     return true;
