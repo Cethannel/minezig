@@ -764,6 +764,7 @@ fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
     }
 
     if (state.chunksInFlightSet.get(toGenPos) == null) {
+        std.log.info("Generating chunk in range at: {}", .{toGenPos});
         try state.sendWorkerThreadQueue.enqueue(.{
             .GetChunk = toGenPos,
         });

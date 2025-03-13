@@ -486,9 +486,7 @@ noinline fn eventQueue() !void {
 
     try genMeshes();
 
-    if (1.0 / sapp.frameDuration() > 30.0) {
-        try chunks.renderDistanceGen();
-    }
+    try chunks.renderDistanceGen();
 }
 
 noinline fn worldRender() !void {
