@@ -85,7 +85,7 @@ pub const Block = extern struct {
     pub const genVerticesSidesFn = *const fn (
         self: *const anyopaque,
         params: *const GenVerticesSidesParams,
-        out: *utils.MultiArray(root.Vertex, 4),
+        out: *[4]root.Vertex,
     ) callconv(.C) bool;
 
     pub const blockUpdate = *const fn (
@@ -132,8 +132,8 @@ pub const Block = extern struct {
     pub inline fn gen_vertices_sides(
         self: *const @This(),
         params: GenVerticesSidesParams,
-    ) !utils.MultiArray(root.Vertex, 4) {
-        var out = utils.MultiArray(root.Vertex, 4).empty;
+    ) ![4]root.Vertex {
+        var out: [4]root.Vertex = undefined;
 
         if (self.inner_gen_vertices_sides(self.inner, &params, &out)) {
             return out;
@@ -439,7 +439,7 @@ pub const Cube = struct {
     pub fn gen_vertices_sides(
         self: *const Self,
         params: *const GenVerticesSidesParams,
-        out: *utils.MultiArray(root.Vertex, 4),
+        out: *[4]root.Vertex,
     ) callconv(.C) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
@@ -503,7 +503,7 @@ pub const Cube = struct {
 fn gen_vertices_sides_from_base(
     side: SideEnum,
     pos: zlm.Vec3,
-    out: *utils.MultiArray(root.Vertex, 4),
+    out: *[4]root.Vertex,
     baseVerts: []const root.Vertex,
     texInfo: *const SideInfo,
     sideScale: zlm.Vec3,
@@ -530,7 +530,7 @@ fn gen_vertices_sides_from_base(
 
         newVertex.modifierColor = texInfo.colorOveride;
 
-        out.set(i, newVertex);
+        out[i] = newVertex;
     }
 
     return true;
@@ -587,7 +587,7 @@ pub const Slab = struct {
     pub fn gen_vertices_sides(
         self: *const Self,
         params: *const GenVerticesSidesParams,
-        out: *utils.MultiArray(root.Vertex, 4),
+        out: *[4]root.Vertex,
     ) callconv(.C) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
@@ -878,7 +878,7 @@ pub const Air = struct {
     pub fn gen_vertices_sides(
         self: *const Self,
         params: *const GenVerticesSidesParams,
-        out: *utils.MultiArray(root.Vertex, 4),
+        out: *[4]root.Vertex,
     ) ![4]root.Vertex {
         _ = self;
         _ = params;
@@ -968,7 +968,7 @@ pub const Fluid = struct {
     pub fn gen_vertices_sides(
         self: *const Self,
         params: *const GenVerticesSidesParams,
-        out: *utils.MultiArray(root.Vertex, 4),
+        out: *[4]root.Vertex,
     ) callconv(.C) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,

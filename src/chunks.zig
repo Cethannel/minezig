@@ -320,9 +320,9 @@ pub const Chunk = struct {
 
                                 if (index2 < 4) {
                                     if (blockStruct.transparent) {
-                                        try transparent_vertices.append(vert.get(index2));
+                                        try transparent_vertices.append(vert[index2]);
                                     } else {
-                                        try solid_vertices.append(vert.get(index2));
+                                        try solid_vertices.append(vert[index2]);
                                     }
                                 }
 
@@ -1124,21 +1124,10 @@ pub fn genMeshSides(
             data.indices.deinit();
             data.vertices.deinit();
         } else {
-            const vertexBuffer = sg.makeBuffer(.{
-                .data = sg.asRange(data.vertices.items),
-            });
-            const indexBuffer = sg.makeBuffer(.{
-                .type = .INDEXBUFFER,
-                .data = sg.asRange(data.indices.items),
-            });
-
             const mesh = Mesh{
                 .vertices = data.vertices,
                 .indices = data.indices,
-                .buffers = .{
-                    .vertexBuffer = vertexBuffer,
-                    .indexBuffer = indexBuffer,
-                },
+                .buffers = null,
             };
 
             @field(rChunk, variant ++ "_mesh") = mesh;
