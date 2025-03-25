@@ -168,7 +168,7 @@ pub const Vertex = extern struct {
 
 pub fn main() !void {
     var gpa = State.GPA{
-        .requested_memory_limit = 4 * 1024 * 1024 * 1024,
+        .requested_memory_limit = 8 * 1024 * 1024 * 1024,
     };
     state.allocator = gpa.allocator();
     state.gpa = gpa;
@@ -263,14 +263,14 @@ fn init() callconv(.C) void {
 
     state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
-    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 32 * 32) catch unreachable;
+    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 64 * 64) catch unreachable;
 
     state.sendWorkerThreadQueue = util.mspc(workerThread.toWorkerThreadMessage) //
         .init(state.allocator, 1024) catch unreachable;
     state.recvWorkerThreadQueue = util.mspc(workerThread.fromWorkerThreadMessage) //
         .init(state.allocator, 1024) catch unreachable;
 
-    state.recvChunkMeshQueue = @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 1024) catch unreachable;
+    state.recvChunkMeshQueue = @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64) catch unreachable;
 
     state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
 
@@ -420,73 +420,71 @@ noinline fn recvWorker() !void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
-                var neighbors: chunks.NeighborChunks = .{};
-                inline for ([_][]const u8{ "x", "z" }) |dir| {
-                    inline for ([_]i64{ 1, -1 }) |offset| {
-                        var offsetVec = IVec3.zero;
-                        @field(offsetVec, dir) = offset;
-                        const rChunk = state.chunkMap.get(nc.pos.add(offsetVec));
-                        const chunk: ?chunks.Chunk = util.getFieldOrNull(rChunk, .chunk);
-                        if (offset == 1) {
-                            @field(neighbors, dir) = chunk;
-                        }
-                        if (offset == -1) {
-                            @field(neighbors, "neg_" ++ dir) = chunk;
-                        }
-                    }
-                }
                 try state.chunkMap.put(nc.pos, nc.chunk);
-                try state.chunkMap.regenNeighborMeshes(nc.pos);
-                try state.genChunkMeshQueue.enqueue(nc.pos);
+                state.chunkMap.regenNeighborMeshes(nc.pos);
+                state.chunkMap.setRegen(nc.pos);
             },
         }
     }
 }
 
 noinline fn genMeshes() !void {
-    while (state.genChunkMeshQueue.dequeue()) |chunkPos| {
-        var neighbors: chunks.NeighborChunks = .{};
-        inline for ([_][]const u8{ "x", "z" }) |dir| {
-            inline for ([_]i64{ 1, -1 }) |offset| {
-                var offsetVec = IVec3.zero;
-                @field(offsetVec, dir) = offset;
-                const rChunk = state.chunkMap.get(chunkPos.add(offsetVec));
-                const chunk: ?chunks.Chunk = util.getFieldOrNull(rChunk, .chunk);
-                if (offset == 1) {
-                    @field(neighbors, dir) = chunk;
-                }
-                if (offset == -1) {
-                    @field(neighbors, "neg_" ++ dir) = chunk;
-                }
-            }
-        }
-        const chunk = state.chunkMap.get(chunkPos).?.chunk;
-        const thread = try std.Thread.spawn(.{}, chunks.genMeshSides, .{
-            chunk,
-            chunkPos,
-            neighbors,
-        });
-        thread.detach();
-        //try state.chunkMap.genMesh(chunkPos);
-    }
-
     while (state.recvChunkMeshQueue.dequeue()) |rchunkthing| {
         var oldChunk = state.chunkMap.get(rchunkthing.pos);
         if (oldChunk) |*oc| {
-            oc.deinit();
+            oc.clear_meshes();
         }
         var rChunk = rchunkthing.rc;
         rChunk.hookupBuffers();
-        try state.chunkMap.map.put(rchunkthing.pos, rChunk);
+        state.chunkMap.map.put(rchunkthing.pos, rChunk) catch |err| {
+            std.log.err("Failed to put chunkmesh in map", .{});
+            return err;
+        };
+    }
+
+    var chunksIter = state.chunkMap.map.iterator();
+
+    while (chunksIter.next()) |entry| {
+        if (entry.value_ptr.regenMesh) {
+            var neighbors: chunks.NeighborChunks = .{};
+            var chunkPos = entry.key_ptr.*;
+            inline for ([_][]const u8{ "x", "z" }) |dir| {
+                inline for ([_]i64{ 1, -1 }) |offset| {
+                    var offsetVec = IVec3.zero;
+                    @field(offsetVec, dir) = offset;
+                    const rChunk = state.chunkMap.get(chunkPos.add(offsetVec));
+                    const chunk: ?*chunks.Chunk = util.getFieldOrNull(rChunk, .chunk);
+                    if (offset == 1) {
+                        @field(neighbors, dir) = chunk;
+                    }
+                    if (offset == -1) {
+                        @field(neighbors, "neg_" ++ dir) = chunk;
+                    }
+                }
+            }
+            entry.value_ptr.regenMesh = false;
+            const thread = try std.Thread.spawn(.{}, chunks.genMeshSides, .{
+                entry.value_ptr.*,
+                chunkPos,
+                neighbors,
+            });
+            thread.detach();
+        }
     }
 }
 
 noinline fn eventQueue() !void {
-    try recvWorker();
+    recvWorker() catch |err| {
+        std.log.err("Error in recvWorker", .{});
+        return err;
+    };
 
     try genMeshes();
 
-    try chunks.renderDistanceGen();
+    chunks.renderDistanceGen() catch |err| {
+        std.log.err("Error in renderDistanceGen", .{});
+        return err;
+    };
 }
 
 noinline fn worldRender() !void {
@@ -496,9 +494,7 @@ noinline fn worldRender() !void {
     var chunkIter = state.chunkMap.map.keyIterator();
     while (chunkIter.next()) |chunkPos| {
         const chunk = state.chunkMap.getPtr(chunkPos.*).?;
-        if (chunk.genOtherThread.load(.unordered) == 0) {
-            chunk.render(chunkPos);
-        }
+        chunk.render(chunkPos);
     }
     chunkIter = state.chunkMap.map.keyIterator();
     while (chunkIter.next()) |chunkPos| {

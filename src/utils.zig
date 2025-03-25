@@ -314,27 +314,11 @@ pub fn getFieldOrNull(
 pub fn getFieldEnum(comptime T: type) type {
     const ti = @typeInfo(T);
     switch (ti) {
-        .@"struct" => |s| {
-            var fields: [s.fields.len]std.builtin.Type.EnumField = undefined;
-            for (s.fields, 0..) |fld, i| {
-                fields[i].value = i;
-                fields[i].name = fld.name;
-            }
-            var decls: [0]std.builtin.Type.Declaration = .{};
-            return @Type(std.builtin.Type{
-                .@"enum" = std.builtin.Type.Enum{
-                    .fields = fields[0..],
-                    .decls = decls[0..],
-                    .tag_type = u32,
-                    .is_exhaustive = true,
-                },
-            });
-        },
         .optional => |opt| {
             return getFieldEnum(opt.child);
         },
         else => {
-            @compileError("Unsupported type: " ++ @tagName(ti));
+            return std.meta.FieldEnum(T);
         },
     }
 }

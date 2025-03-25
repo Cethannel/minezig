@@ -103,7 +103,7 @@ fn getChunk(chunkMap: *chunks.ChunkMap, pos: IVec3) !void {
     try state.recvWorkerThreadQueue.enqueue(.{
         .NewChunk = .{
             .pos = pos,
-            .chunk = chunkMap.get(pos).?.chunk,
+            .chunk = chunkMap.get(pos).?.chunk.*,
         },
     });
 }

@@ -452,10 +452,13 @@ pub const ChunkMap = struct {
 
     pub fn put(self: *@This(), pos: IVec3, chunk: Chunk) !void {
         var rchunk = RenderChunk{
-            .chunk = chunk,
+            .chunk = try self.allocator.create(Chunk),
+            .regenMesh = false,
+            .allocator = self.allocator,
             .solid_mesh = null,
             .transparent_mesh = null,
         };
+        rchunk.chunk.* = chunk;
 
         if (self.map.getPtr(pos)) |c| {
             inline for (mesh_variants) |varName| {
@@ -479,6 +482,12 @@ pub const ChunkMap = struct {
 
     pub fn contains(self: *const Self, pos: IVec3) bool {
         return self.map.contains(pos);
+    }
+
+    pub fn setRegen(self: *Self, pos: IVec3) void {
+        if (self.getPtr(pos)) |chunk| {
+            chunk.regenMesh = true;
+        }
     }
 
     pub fn getBlockPtr(self: *const Self, pos: IVec3) ?*Block {
@@ -542,11 +551,7 @@ pub const ChunkMap = struct {
 
         while (iter.next()) |val| {
             const rChunk = val.value_ptr;
-            inline for (mesh_variants) |variant| {
-                if (@field(rChunk, variant ++ "_mesh")) |*mesh| {
-                    mesh.deinit();
-                }
-            }
+            rChunk.deinit();
         }
 
         self.map.deinit();
@@ -591,7 +596,7 @@ pub const ChunkMap = struct {
         return out;
     }
 
-    pub fn regenNeighborMeshes(self: *const @This(), chunkPos: IVec3) !void {
+    pub fn regenNeighborMeshes(self: *@This(), chunkPos: IVec3) void {
         inline for ([_][]const u8{ "x", "z" }) |dir| {
             inline for ([_]i64{ 1, -1 }) |offset| {
                 var offsetVec = IVec3.zero;
@@ -600,7 +605,7 @@ pub const ChunkMap = struct {
                 const newPos = chunkPos.add(offsetVec);
                 if (self.map.getPtr(newPos)) |neibor| {
                     if (neibor.transparent_mesh != null or neibor.solid_mesh != null) {
-                        try state.genChunkMeshQueue.enqueue(newPos);
+                        self.setRegen(newPos);
                     }
                 }
             }
@@ -621,8 +626,9 @@ pub const ChunkMap = struct {
 };
 
 pub const RenderChunk = struct {
-    chunk: Chunk,
-    genOtherThread: std.atomic.Value(u8) = .init(0),
+    chunk: *Chunk,
+    allocator: std.mem.Allocator,
+    regenMesh: bool,
     solid_mesh: ?Mesh,
     transparent_mesh: ?Mesh,
 
@@ -637,6 +643,7 @@ pub const RenderChunk = struct {
     }
 
     pub fn deinit(self: *@This()) void {
+        self.allocator.destroy(self.chunk);
         self.clear_meshes();
     }
 
@@ -646,8 +653,8 @@ pub const RenderChunk = struct {
             if (mesh.buffers) |buffs| {
                 state.bind.vertex_buffers[0] = buffs.vertexBuffer;
                 state.bind.index_buffer = buffs.indexBuffer;
-
                 sg.applyBindings(state.bind);
+
                 const vs_params = shd.VsParams{
                     .mvp = root.computeVsParams(
                         @floatFromInt(pos.x * 16),
@@ -667,8 +674,8 @@ pub const RenderChunk = struct {
             if (mesh.buffers) |buffs| {
                 state.bind.vertex_buffers[0] = buffs.vertexBuffer;
                 state.bind.index_buffer = buffs.indexBuffer;
-
                 sg.applyBindings(state.bind);
+
                 const vs_params = shd.VsParams{
                     .mvp = root.computeVsParams(
                         @floatFromInt(pos.x * 16),
@@ -755,16 +762,16 @@ fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
         return;
     }
 
-    if (state.chunkMap.get(toGenPos)) |chunk| {
+    if (state.chunkMap.getPtr(toGenPos)) |chunk| {
         if (chunk.solid_mesh == null and chunk.transparent_mesh == null) {
-            try state.genChunkMeshQueue.enqueue(toGenPos);
+            chunk.regenMesh = true;
         }
 
         return;
     }
 
     if (state.chunksInFlightSet.get(toGenPos) == null) {
-        std.log.info("Generating chunk in range at: {}", .{toGenPos});
+        //std.log.info("Generating chunk in range at: {}", .{toGenPos});
         try state.sendWorkerThreadQueue.enqueue(.{
             .GetChunk = toGenPos,
         });
@@ -1060,18 +1067,19 @@ fn propGrass(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
 }
 
 pub const NeighborChunks = struct {
-    x: ?Chunk = null,
-    neg_x: ?Chunk = null,
-    z: ?Chunk = null,
-    neg_z: ?Chunk = null,
+    x: ?*Chunk = null,
+    neg_x: ?*Chunk = null,
+    z: ?*Chunk = null,
+    neg_z: ?*Chunk = null,
 };
 
 pub fn genMeshSides(
-    chunk: Chunk,
+    rChunkArg: RenderChunk,
     pos: IVec3,
     neighbors: NeighborChunks,
 ) !void {
     var out: Sides = undefined;
+    var rChunk = rChunkArg;
 
     inline for ([_][]const u8{ "x", "z" }) |dir| {
         inline for ([_]i64{ 1, -1 }) |offset| {
@@ -1107,13 +1115,7 @@ pub fn genMeshSides(
         }
     }
 
-    const meshData = try chunk.gen_mesh(out, state.allocator);
-
-    var rChunk = RenderChunk{
-        .chunk = chunk,
-        .solid_mesh = null,
-        .transparent_mesh = null,
-    };
+    const meshData = try rChunk.chunk.gen_mesh(out, state.allocator);
 
     inline for (mesh_variants) |variant| {
         const data: Chunk.MeshData = @field(meshData, variant);
