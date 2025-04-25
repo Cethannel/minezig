@@ -152,7 +152,7 @@ pub const Selector = struct {
                 const pos = chunks.worldToChunkPos(state.cameraPos.add(zlm.Vec3.new(16 * chunkX, 0, 16 * chunkZ)));
                 var found = false;
                 if (state.chunkMap.get(pos.chunkPos)) |chunk| {
-                    for (chunk.chunk.blocks, 0..) |slice, x| {
+                    for (chunk.blocks, 0..) |slice, x| {
                         for (slice, 0..) |column, y| {
                             for (column, 0..) |block, z| {
                                 if (block.id != .Air) {

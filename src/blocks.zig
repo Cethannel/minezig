@@ -19,7 +19,7 @@ pub const BlockUpdateParams = extern struct {
         pos: *const utils.IVec3,
     ) callconv(.C) void;
 
-    chunksMap: *const chunks.ChunkMap,
+    chunksMap: *const std.AutoHashMap(chunks.IVec3, chunks.Chunk),
     pos: *const utils.IVec3,
     setblockCallback: setBlockCallbackT,
     blockUpdateCallback: blockUpdateCallbackT,

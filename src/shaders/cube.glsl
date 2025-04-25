@@ -44,7 +44,7 @@ void main() {
     if (text.r == text.g && text.g == text.b) {
         outColor *= vec4(modifierColor, 1.0);
     }
-    if (text.r == text.g && text.r != text.g) {
+    if (text.r == text.g) {
         outColor *= vec4(normal, 1.0);
     }
     frag_color = outColor;

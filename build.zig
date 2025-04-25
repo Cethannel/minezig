@@ -25,28 +25,28 @@ pub fn build(b: *std.Build) !void {
         "Disstable controller support",
     ) orelse false);
 
+    const std_args = .{
+        .target = target,
+        .optimize = optimize,
+    };
+
     const dep_sokol = b.dependency("sokol", .{
         .target = target,
         .optimize = optimize,
         .with_sokol_imgui = true,
     });
 
-    const zigimg_dependency = b.dependency("zigimg", .{
-        .target = target,
-        .optimize = optimize,
-    });
+    const zigimg_dependency = b.dependency("zigimg", std_args);
 
     const zlm = b.dependency("zlm", .{});
 
-    const dep_cimgui = b.dependency("cimgui", .{
-        .target = target,
-        .optimize = optimize,
-    });
+    const dep_cimgui = b.dependency("cimgui", std_args);
 
-    const zclay = b.dependency("zclay", .{
-        .target = target,
-        .optimize = optimize,
-    });
+    const zclay = b.dependency("zclay", std_args);
+
+    const uuid = b.dependency("uuid", std_args);
+
+    const ziglangSet = b.dependency("ziglangSet", std_args);
 
     // inject the cimgui header search path into the sokol C library compile step
     dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
@@ -89,6 +89,14 @@ pub fn build(b: *std.Build) !void {
         .{
             .name = "zclay",
             .dep = zclay,
+        },
+        .{
+            .name = "uuid",
+            .dep = uuid,
+        },
+        .{
+            .name = "ziglangSet",
+            .dep = ziglangSet,
         },
     };
 

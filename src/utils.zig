@@ -17,6 +17,10 @@ pub fn mspc(T: type) type {
 
         const Self = @This();
 
+        pub fn innerT(_: *const Self) type {
+            return T;
+        }
+
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
             var buffer = try allocator.alloc(std.atomic.Value(?*T), capacity);
             errdefer allocator.free(buffer);

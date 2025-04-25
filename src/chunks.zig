@@ -4,6 +4,8 @@ const shd = @import("shaders/cube.glsl.zig");
 
 const config = @import("config");
 
+const uuid = @import("uuid");
+
 const fastnoise = @import("fastnoise.zig");
 
 const Blocks = @import("blocks.zig");
@@ -110,6 +112,7 @@ const baseIndices = [_]u32{
 
 pub const Chunk = struct {
     blocks: [chunkWidth][chunkHeight][chunkWidth]Block,
+    uuid: uuid.Uuid,
 
     pub const MeshData = struct {
         vertices: std.ArrayList(root.Vertex),
@@ -137,9 +140,15 @@ pub const Chunk = struct {
     }
 
     const Solid = gen_solid_chunk();
-    const AllAir = @This(){
-        .blocks = @splat(@splat(@splat(.Air))),
-    };
+
+    const Self = @This();
+
+    pub fn AllAir() @This() {
+        return Self{
+            .blocks = @splat(@splat(@splat(.Air))),
+            .uuid = uuid.v4.new(),
+        };
+    }
 
     pub fn gen_solid_chunk() @This() {
         const idThing: u32 = 1;
@@ -422,14 +431,22 @@ const Sides = struct {
     };
 };
 
-pub const ChunkMap = struct {
+pub const ChunkGenFunc = *const fn (chunk: *Chunk, pos: IVec3) callconv(.C) void;
+
+pub fn add_builtin_gen_funcs() !void {
+    try state.chunkGenFuncs.append(&genTerrain);
+    try state.chunkGenFuncs.append(&genWater);
+    try state.chunkGenFuncs.append(&propGrass);
+}
+
+pub const ChunkMap = std.AutoHashMap(IVec3, Chunk);
+
+pub const OldChunkMap = struct {
     map: std.AutoHashMap(IVec3, RenderChunk),
     chunkGenFuncs: std.ArrayList(ChunkGenFunc),
     allocator: std.mem.Allocator,
 
     const Self = @This();
-
-    pub const ChunkGenFunc = *const fn (chunk: *Chunk, pos: IVec3) callconv(.C) void;
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         var chunkGenFuncs: std.ArrayList(ChunkGenFunc) = .init(allocator);
@@ -474,16 +491,6 @@ pub const ChunkMap = struct {
         try self.map.put(pos, rchunk);
     }
 
-    pub fn genChunk(self: *Self, chunkPos: IVec3) !void {
-        var chunk = Chunk.AllAir;
-
-        for (self.chunkGenFuncs.items) |func| {
-            func(&chunk, chunkPos);
-        }
-
-        try self.put(chunkPos, chunk);
-    }
-
     pub fn contains(self: *const Self, pos: IVec3) bool {
         return self.map.contains(pos);
     }
@@ -492,16 +499,6 @@ pub const ChunkMap = struct {
         if (self.getPtr(pos)) |chunk| {
             chunk.regenMesh = true;
         }
-    }
-
-    pub fn getBlockPtr(self: *const Self, pos: IVec3) ?*Block {
-        const chunkPos = iWorldToChunkPos(pos);
-
-        const chunk = self.getPtr(chunkPos.chunkPos) orelse return null;
-        return &chunk.chunk.blocks //
-        [@intCast(chunkPos.inChunkPos.x)] //
-        [@intCast(chunkPos.inChunkPos.y)] //
-        [@intCast(chunkPos.inChunkPos.z)];
     }
 
     pub noinline fn genMesh(self: *Self, chunkPos: IVec3) !void {
@@ -599,35 +596,97 @@ pub const ChunkMap = struct {
 
         return out;
     }
+};
 
-    pub fn regenNeighborMeshes(self: *@This(), chunkPos: IVec3) void {
-        inline for ([_][]const u8{ "x", "z" }) |dir| {
-            inline for ([_]i64{ 1, -1 }) |offset| {
-                var offsetVec = IVec3.zero;
-                @field(offsetVec, dir) = offset;
+pub fn set_block(chunkMap: *std.AutoHashMap(IVec3, Chunk), pos: IVec3, block: Block) !void {
+    const poss = worldToChunkPos(utils.ivec3ToVec3(pos));
 
-                const newPos = chunkPos.add(offsetVec);
-                if (self.map.getPtr(newPos)) |neibor| {
-                    if (neibor.transparent_mesh != null or neibor.solid_mesh != null) {
-                        self.setRegen(newPos);
-                    }
-                }
+    std.log.info("Setting block in chunk: {}", .{poss.chunkPos});
+    std.log.info("Setting block in chunk pos: {}", .{poss.inChunkPos});
+
+    const chunk = chunkMap.getPtr(poss.chunkPos) orelse return error.ChunkNotFound;
+
+    chunk.blocks[@intCast(poss.inChunkPos.x)] //
+    [@intCast(poss.inChunkPos.y)][@intCast(poss.inChunkPos.z)] = block;
+}
+
+pub fn genChunk(map: *std.AutoHashMap(IVec3, Chunk), chunkPos: IVec3) !void {
+    var chunk = Chunk.AllAir();
+
+    for (state.chunkGenFuncs.items) |func| {
+        func(&chunk, chunkPos);
+    }
+
+    try map.put(chunkPos, chunk);
+}
+
+pub fn getBlockPtr(self: *const std.AutoHashMap(IVec3, Chunk), pos: IVec3) ?*Block {
+    const chunkPos = iWorldToChunkPos(pos);
+
+    const chunk = self.getPtr(chunkPos.chunkPos) orelse return null;
+    return &chunk.blocks //
+    [@intCast(chunkPos.inChunkPos.x)] //
+    [@intCast(chunkPos.inChunkPos.y)] //
+    [@intCast(chunkPos.inChunkPos.z)];
+}
+
+pub fn regenNeighborMeshes(chunkPos: IVec3) !void {
+    inline for ([_][]const u8{ "x", "z" }) |dir| {
+        inline for ([_]i64{ 1, -1 }) |offset| {
+            var offsetVec = IVec3.zero;
+            @field(offsetVec, dir) = offset;
+
+            const newPos = chunkPos.add(offsetVec);
+            if (state.solidMeshMap.contains(newPos) or state.transparentMeshMap.contains(newPos)) {
+                try mark_chunk_for_regen(newPos);
             }
         }
     }
+}
 
-    pub fn set_block(self: *@This(), pos: IVec3, block: Block) !void {
-        const poss = worldToChunkPos(utils.ivec3ToVec3(pos));
-
-        std.log.info("Setting block in chunk: {}", .{poss.chunkPos});
-        std.log.info("Setting block in chunk pos: {}", .{poss.inChunkPos});
-
-        const chunk = self.getPtr(poss.chunkPos) orelse return error.ChunkNotFound;
-
-        chunk.chunk.blocks[@intCast(poss.inChunkPos.x)] //
-        [@intCast(poss.inChunkPos.y)][@intCast(poss.inChunkPos.z)] = block;
+pub fn mark_chunk_for_regen(pos: IVec3) !void {
+    if (state.chunkMap.contains(pos)) {
+        _ = try state.chunksToRegen.add(pos);
     }
-};
+}
+
+pub fn chunkData(comptime T: type) type {
+    return struct {
+        inner: T,
+        uuid: uuid.Uuid,
+
+        const Self = @This();
+
+        pub usingnamespace if (@hasDecl(T, "deinit")) struct {
+            pub fn deinit(self: *Self) void {
+                self.inner.deinit();
+            }
+        } else struct {};
+    };
+}
+
+pub fn chunkDataMap(comptime T: type) type {
+    return std.AutoHashMap(IVec3, chunkData(T));
+}
+
+fn self_or_inner(comptime T: type) type {
+    const tInfo = @typeInfo(T);
+    switch (tInfo) {
+        .pointer => |pt| {
+            return pt.child;
+        },
+        else => return T,
+    }
+}
+
+pub fn deinitDataMap(input: anytype) void {
+    var iter = input.valueIterator();
+    while (iter.next()) |val| {
+        val.deinit();
+    }
+
+    input.deinit();
+}
 
 pub const RenderChunk = struct {
     chunk: *Chunk,
@@ -702,13 +761,17 @@ pub const RenderChunk = struct {
     }
 };
 
+const emptyBuf: [0]u8 = .{};
+var emptyAllocBuf = std.heap.FixedBufferAllocator.init(&emptyBuf);
+const emptyAlloc = emptyAllocBuf.allocator();
+
 pub const Mesh = struct {
-    vertices: std.ArrayList(root.Vertex),
-    indices: std.ArrayList(u32),
+    vertices: std.ArrayList(root.Vertex) = .init(emptyAlloc),
+    indices: std.ArrayList(u32) = .init(emptyAlloc),
     buffers: ?struct {
         vertexBuffer: sg.Buffer,
         indexBuffer: sg.Buffer,
-    },
+    } = null,
 
     pub fn deinit(self: *@This()) void {
         if (self.buffers) |buffs| {
@@ -721,11 +784,15 @@ pub const Mesh = struct {
     }
 
     pub fn hookupBuffers(self: *@This()) void {
-        if (self.buffers) |buffs| {
-            sg.destroyBuffer(buffs.vertexBuffer);
-            sg.destroyBuffer(buffs.indexBuffer);
+        if (self.vertices.items.len == 0 or self.indices.items.len == 0) {
+            return;
         }
-
+        if (self.buffers) |buffs| {
+            std.log.info("Destroying buffer: {any}", .{buffs.indexBuffer});
+            sg.destroyBuffer(buffs.indexBuffer);
+            std.log.info("Destroying buffer: {any}", .{buffs.vertexBuffer});
+            sg.destroyBuffer(buffs.vertexBuffer);
+        }
         const vertexBuffer = sg.makeBuffer(.{
             .data = sg.asRange(self.vertices.items),
         });
@@ -738,6 +805,14 @@ pub const Mesh = struct {
             .vertexBuffer = vertexBuffer,
             .indexBuffer = indexBuffer,
         };
+    }
+
+    pub fn swapInplace(self: *@This(), other: @This()) void {
+        var otherMut = other;
+        inline for (.{ "vertices", "indices" }) |field| {
+            std.mem.swap(@FieldType(@This(), field), &@field(self, field), &@field(otherMut, field));
+        }
+        otherMut.deinit();
     }
 };
 
@@ -766,9 +841,9 @@ fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
         return;
     }
 
-    if (state.chunkMap.getPtr(toGenPos)) |chunk| {
-        if (chunk.solid_mesh == null and chunk.transparent_mesh == null) {
-            chunk.regenMesh = true;
+    if (state.chunkMap.contains(toGenPos)) {
+        if (!state.solidMeshMap.contains(toGenPos) and !state.transparentMeshMap.contains(toGenPos)) {
+            try mark_chunk_for_regen(toGenPos);
         }
 
         return;
@@ -789,8 +864,14 @@ fn outRangeDel(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
         return;
     }
 
-    if (state.chunkMap.getPtr(toGenPos)) |chunk| {
-        chunk.clear_meshes();
+    if (state.solidMeshMap.fetchRemove(toGenPos)) |kv| {
+        var chunk = kv.value;
+        chunk.deinit();
+    }
+
+    if (state.transparentMeshMap.fetchRemove(toGenPos)) |kv| {
+        var chunk = kv.value;
+        chunk.deinit();
     }
 }
 
@@ -799,7 +880,7 @@ pub fn renderDistanceGen() !void {
     const chunkPos: IVec3 = getPlayerChunkPos();
     const dist2: u32 = @as(u32, @intCast(state.renderDistance)) * state.renderDistance;
 
-    var chunkIter = state.chunkMap.map.keyIterator();
+    var chunkIter = state.chunkMap.keyIterator();
     while (chunkIter.next()) |toGenPos| {
         try outRangeDel(chunkPos, toGenPos.*, dist2);
     }
@@ -1078,12 +1159,11 @@ pub const NeighborChunks = struct {
 };
 
 pub fn genMeshSides(
-    rChunkArg: RenderChunk,
     pos: IVec3,
     neighbors: NeighborChunks,
 ) !void {
     var out: Sides = undefined;
-    var rChunk = rChunkArg;
+    var chunk = state.chunkMap.get(pos) orelse return;
 
     inline for ([_][]const u8{ "x", "z" }) |dir| {
         inline for ([_]i64{ 1, -1 }) |offset| {
@@ -1119,7 +1199,13 @@ pub fn genMeshSides(
         }
     }
 
-    const meshData = try rChunk.chunk.gen_mesh(out, state.allocator);
+    const meshData = try chunk.gen_mesh(out, state.allocator);
+
+    var rc: @FieldType(state.recvChunkMeshQueue.innerT(), "rc") = .{
+        .uuid = chunk.uuid,
+        .solid = .{},
+        .transparent = .{},
+    };
 
     inline for (mesh_variants) |variant| {
         const data: Chunk.MeshData = @field(meshData, variant);
@@ -1136,12 +1222,12 @@ pub fn genMeshSides(
                 .buffers = null,
             };
 
-            @field(rChunk, variant ++ "_mesh") = mesh;
+            @field(rc, variant) = mesh;
         }
     }
 
     try state.recvChunkMeshQueue.enqueue(.{
         .pos = pos,
-        .rc = rChunk,
+        .rc = rc,
     });
 }

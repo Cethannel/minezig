@@ -13,9 +13,13 @@ const clayRender = @import("clay_render.zig");
 const util = @import("utils.zig");
 const workerThread = @import("workerThread.zig");
 
+const zuuid = @import("uuid");
+
 const config = @import("config");
 
 const clay = @import("zclay");
+
+const zset = @import("ziglangSet");
 
 const c = if (config.controllerSupport) @cImport(
     @cInclude("Gamepad.h"),
@@ -82,7 +86,12 @@ const State = struct {
     text_pass_action: sg.PassAction = .{},
     atlas: []u32 = undefined,
 
-    chunkMap: chunks.ChunkMap = undefined,
+    chunkMap: std.AutoHashMap(IVec3, chunks.Chunk) = undefined,
+    solidMeshMap: chunks.chunkDataMap(chunks.Mesh) = undefined,
+    transparentMeshMap: chunks.chunkDataMap(chunks.Mesh) = undefined,
+    chunksToRegen: zset.ArraySetManaged(IVec3) = undefined,
+
+    chunkGenFuncs: std.ArrayList(chunks.ChunkGenFunc) = undefined,
 
     cameraPos: Vec3 = Vec3.new(0.0, 129.0, 3.0),
     prevCameraPos: Vec3 = Vec3.new(0.0, 0.0, 0.0),
@@ -103,7 +112,18 @@ const State = struct {
     sendWorkerThreadQueue: util.mspc(workerThread.toWorkerThreadMessage) = undefined,
     recvWorkerThreadQueue: util.mspc(workerThread.fromWorkerThreadMessage) = undefined,
 
-    recvChunkMeshQueue: util.mspc(struct { rc: chunks.RenderChunk, pos: IVec3 }) = undefined,
+    recvChunkMeshQueue: util.mspc(struct { rc: struct {
+        solid: chunks.Mesh,
+        transparent: chunks.Mesh,
+        uuid: zuuid.Uuid,
+
+        const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            self.solid.deinit();
+            self.transparent.deinit();
+        }
+    }, pos: IVec3 }) = undefined,
 
     chunksInFlightSet: chunksInFlightT = undefined,
 
@@ -181,7 +201,7 @@ pub fn main() !void {
         .width = window_w,
         .height = window_h,
         .icon = .{ .sokol_default = true },
-        .window_title = "triangle.zig",
+        .window_title = "minezig",
         .sample_count = 4,
         .logger = .{ .func = slog.func },
         .swap_interval = 0,
@@ -212,7 +232,7 @@ fn init() callconv(.C) void {
     sg.setup(.{
         .environment = sglue.environment(),
         .logger = .{ .func = slog.func },
-        .buffer_pool_size = 1024 * 4,
+        .buffer_pool_size = 1024 * 8,
     });
 
     simgui.setup(.{
@@ -274,8 +294,19 @@ fn init() callconv(.C) void {
 
     state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
 
-    state.chunkMap = chunks.ChunkMap.init(state.allocator) catch unreachable;
-    state.chunkMap.map.ensureTotalCapacity(32 * 32) catch unreachable;
+    state.chunkMap = std.AutoHashMap(IVec3, chunks.Chunk).init(state.allocator);
+    state.chunkMap.ensureTotalCapacity(32 * 32) catch unreachable;
+
+    state.solidMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
+    state.solidMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
+
+    state.transparentMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
+    state.transparentMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
+
+    state.chunksToRegen = zset.ArraySetManaged(IVec3).init(state.allocator);
+
+    state.chunkGenFuncs = std.ArrayList(chunks.ChunkGenFunc).init(state.allocator);
+    chunks.add_builtin_gen_funcs() catch unreachable;
 
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
@@ -421,55 +452,70 @@ noinline fn recvWorker() !void {
         switch (msg) {
             .NewChunk => |nc| {
                 try state.chunkMap.put(nc.pos, nc.chunk);
-                state.chunkMap.regenNeighborMeshes(nc.pos);
-                state.chunkMap.setRegen(nc.pos);
+                try chunks.regenNeighborMeshes(nc.pos);
+                try chunks.mark_chunk_for_regen(nc.pos);
             },
         }
     }
 }
 
+fn clear_meshes(pos: IVec3) void {
+    if (state.solidMeshMap.fetchRemove(pos)) |kv| {
+        var mesh = kv.value;
+        mesh.deinit();
+    }
+    if (state.transparentMeshMap.fetchRemove(pos)) |kv| {
+        var mesh = kv.value;
+        mesh.deinit();
+    }
+}
+
 noinline fn genMeshes() !void {
     while (state.recvChunkMeshQueue.dequeue()) |rchunkthing| {
-        var oldChunk = state.chunkMap.get(rchunkthing.pos);
-        if (oldChunk) |*oc| {
-            oc.clear_meshes();
-        }
         var rChunk = rchunkthing.rc;
-        rChunk.hookupBuffers();
-        state.chunkMap.map.put(rchunkthing.pos, rChunk) catch |err| {
-            std.log.err("Failed to put chunkmesh in map", .{});
-            return err;
-        };
+        if (state.chunkMap.getPtr(rchunkthing.pos)) |chunk| {
+            if (chunk.uuid != rChunk.uuid) {
+                rChunk.deinit();
+                continue;
+            }
+        }
+        inline for (.{ "solid", "transparent" }) |field| {
+            if (@field(state, field ++ "MeshMap").getPtr(rchunkthing.pos)) |data| {
+                data.deinit();
+            }
+            var mesh = @field(rChunk, field);
+            mesh.hookupBuffers();
+            try @field(state, field ++ "MeshMap").put(rchunkthing.pos, .{
+                .inner = mesh,
+                .uuid = rChunk.uuid,
+            });
+        }
     }
 
-    var chunksIter = state.chunkMap.map.iterator();
+    var chunksIter = state.chunksToRegen.iterator();
 
     while (chunksIter.next()) |entry| {
-        if (entry.value_ptr.regenMesh) {
-            var neighbors: chunks.NeighborChunks = .{};
-            var chunkPos = entry.key_ptr.*;
-            inline for ([_][]const u8{ "x", "z" }) |dir| {
-                inline for ([_]i64{ 1, -1 }) |offset| {
-                    var offsetVec = IVec3.zero;
-                    @field(offsetVec, dir) = offset;
-                    const rChunk = state.chunkMap.get(chunkPos.add(offsetVec));
-                    const chunk: ?*chunks.Chunk = util.getFieldOrNull(rChunk, .chunk);
-                    if (offset == 1) {
-                        @field(neighbors, dir) = chunk;
-                    }
-                    if (offset == -1) {
-                        @field(neighbors, "neg_" ++ dir) = chunk;
-                    }
+        var neighbors: chunks.NeighborChunks = .{};
+        var chunkPos = entry.key_ptr.*;
+        defer _ = state.chunksToRegen.remove(chunkPos);
+        inline for ([_][]const u8{ "x", "z" }) |dir| {
+            inline for ([_]i64{ 1, -1 }) |offset| {
+                var offsetVec = IVec3.zero;
+                @field(offsetVec, dir) = offset;
+                const chunk = state.chunkMap.getPtr(chunkPos.add(offsetVec));
+                if (offset == 1) {
+                    @field(neighbors, dir) = chunk;
+                }
+                if (offset == -1) {
+                    @field(neighbors, "neg_" ++ dir) = chunk;
                 }
             }
-            entry.value_ptr.regenMesh = false;
-            const thread = try std.Thread.spawn(.{}, chunks.genMeshSides, .{
-                entry.value_ptr.*,
-                chunkPos,
-                neighbors,
-            });
-            thread.detach();
         }
+        const thread = try std.Thread.spawn(.{}, chunks.genMeshSides, .{
+            chunkPos,
+            neighbors,
+        });
+        thread.detach();
     }
 }
 
@@ -491,17 +537,38 @@ noinline fn worldRender() !void {
     sg.endPass();
     sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
     sg.applyPipeline(state.pip);
-    var chunkIter = state.chunkMap.map.keyIterator();
-    while (chunkIter.next()) |chunkPos| {
-        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
-        chunk.render(chunkPos);
+    var chunkIter = state.solidMeshMap.iterator();
+    while (chunkIter.next()) |entry| {
+        try renderMesh(entry.value_ptr, entry.key_ptr);
     }
-    chunkIter = state.chunkMap.map.keyIterator();
-    while (chunkIter.next()) |chunkPos| {
-        const chunk = state.chunkMap.getPtr(chunkPos.*).?;
-        chunk.renderTransparent(chunkPos);
+    chunkIter = state.transparentMeshMap.iterator();
+    while (chunkIter.next()) |entry| {
+        try renderMesh(entry.value_ptr, entry.key_ptr);
     }
     sg.endPass();
+}
+
+inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVec3) !void {
+    if (state.chunkMap.getPtr(pos.*)) |chunk| {
+        std.debug.assert(chunk.uuid == mesh.uuid);
+    } else {
+        std.debug.panic("Failed to find chunk for mesh at: {}", .{pos});
+    }
+    if (mesh.inner.buffers) |buffs| {
+        state.bind.vertex_buffers[0] = buffs.vertexBuffer;
+        state.bind.index_buffer = buffs.indexBuffer;
+        sg.applyBindings(state.bind);
+
+        const vs_params = shd.VsParams{
+            .mvp = computeVsParams(
+                @floatFromInt(pos.x * 16),
+                @floatFromInt(pos.y * 16),
+                @floatFromInt(pos.z * 16),
+            ),
+        };
+        sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+        sg.draw(0, @intCast(mesh.inner.indices.items.len), 1);
+    }
 }
 
 noinline fn imguiPass() !void {
@@ -599,6 +666,10 @@ fn cleanup() callconv(.C) void {
     state.chunksInFlightSet.deinit();
     state.genChunkMeshQueue.deinit();
     state.chunkMap.deinit();
+    chunks.deinitDataMap(&state.solidMeshMap);
+    chunks.deinitDataMap(&state.transparentMeshMap);
+    state.chunksToRegen.deinit();
+    state.chunkGenFuncs.deinit();
     state.allocator.free(state.atlas);
     sg.shutdown();
 
@@ -791,35 +862,6 @@ fn gamepad_axisMovedFunc(
     }
 }
 
-fn createMesh(offset: Vec3) Mesh {
-    var mesh: Mesh = .{
-        .offset = offset,
-        .numIndices = 0,
-        .indexBuffer = .{},
-        .vertexBuffer = .{},
-    };
-
-    const chunk = chunks.Chunk.gen_solid_chunk().gen_mesh(state.allocator) catch unreachable;
-
-    const verticesToRender = chunk.vertices.items;
-
-    // create vertex buffer with triangle vertices
-    mesh.vertexBuffer = sg.makeBuffer(.{
-        .data = sg.asRange(verticesToRender),
-    });
-
-    const indices = chunk.indices.items;
-
-    mesh.numIndices = @intCast(indices.len);
-
-    mesh.indexBuffer = sg.makeBuffer(.{
-        .type = .INDEXBUFFER,
-        .data = sg.asRange(indices),
-    });
-
-    return mesh;
-}
-
 fn calcPos(pitch: f32, yaw: f32, offset: f32) Vec3 {
     const pitchRadian = pitch; // zlm.toRadians(pitch);
     const yawRadian = yaw; // zlm.toRadians(yaw);
@@ -935,7 +977,7 @@ fn water_update(
     for ([_]i64{ -1, 1 }) |x| {
         for ([_]i64{ -1, 1 }) |z| {
             const neighborpos = args.pos.add(util.IVec3.new(x, 0, z));
-            const neighbor = args.chunksMap.getBlockPtr(neighborpos) orelse continue;
+            const neighbor = chunks.getBlockPtr(args.chunksMap, neighborpos) orelse continue;
             if (neighbor.id == .Air) {
                 waterProp(args.chunksMap, neighborpos, args.setblockCallback, args.blockUpdateCallback);
             }
@@ -959,7 +1001,7 @@ fn waterProp(
             var offset = util.IVec3.zero;
             @field(offset, field) = x;
             const neighborpos = pos.add(offset);
-            if (chunkMap.getBlockPtr(neighborpos)) |neighbor| {
+            if (chunks.getBlockPtr(chunkMap, neighborpos)) |neighbor| {
                 std.log.info("Checking neighbor with block: {s}", .{blocks.getBlockFromId(neighbor.id).?.blockName.*});
                 if (neighbor.id == waterId) {
                     neighborWater += 1;

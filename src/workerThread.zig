@@ -28,8 +28,13 @@ pub const fromWorkerThreadMessage = union(enum) {
 
 var blockUpdateQueue: utils.mspc(utils.IVec3) = undefined;
 
+const ChunkMap = std.AutoHashMap(IVec3, chunks.Chunk);
+
 pub fn workerThread() void {
-    var chunkMap = chunks.ChunkMap.init(state.allocator) catch unreachable;
+    var arena = std.heap.ArenaAllocator.init(state.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var chunkMap = ChunkMap.init(allocator);
     var playerPos: ?zlm.Vec3 = null;
     defer chunkMap.deinit();
     blockUpdateQueue = utils.mspc(utils.IVec3).init(state.allocator, 128) catch unreachable;
@@ -52,7 +57,7 @@ pub fn workerThread() void {
                 .SetPlayerPos => |pos| playerPos = pos,
                 .SetBlock => |sbData| {
                     std.log.info("Setting block at: {}", .{sbData.pos});
-                    chunkMap.set_block(sbData.pos, sbData.block) catch {
+                    chunks.set_block(&chunkMap, sbData.pos, sbData.block) catch {
                         std.log.err("Failed to set block at: {}", .{sbData.pos});
                     };
                     const cpos = chunks.worldToChunkPos(utils.ivec3ToVec3(sbData.pos));
@@ -70,7 +75,7 @@ pub fn workerThread() void {
 
         while (updates.pop()) |update| {
             std.log.info("Got block update at: {}", .{update});
-            if (chunkMap.getBlockPtr(update)) |block| {
+            if (chunks.getBlockPtr(&chunkMap, update)) |block| {
                 if (blocks.getBlockFromId(block.id)) |blk| {
                     blk.block_update(&.{
                         .pos = &update,
@@ -96,14 +101,14 @@ pub fn workerThread() void {
     }
 }
 
-fn getChunk(chunkMap: *chunks.ChunkMap, pos: IVec3) !void {
+fn getChunk(chunkMap: *ChunkMap, pos: IVec3) !void {
     if (chunkMap.get(pos) == null) {
-        try chunkMap.genChunk(pos);
+        try chunks.genChunk(chunkMap, pos);
     }
     try state.recvWorkerThreadQueue.enqueue(.{
         .NewChunk = .{
             .pos = pos,
-            .chunk = chunkMap.get(pos).?.chunk.*,
+            .chunk = chunkMap.get(pos).?,
         },
     });
 }
