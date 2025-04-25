@@ -235,11 +235,12 @@ pub const Chunk = struct {
         var solid_maxOffset: u32 = 0;
         var transparent_maxOffset: u32 = 0;
 
-        var solid_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, 10240);
-        var solid_indices = try std.ArrayList(u32).initCapacity(allocator, 10240);
+        const initial_len = 10240;
+        var solid_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, initial_len);
+        var solid_indices = try std.ArrayList(u32).initCapacity(allocator, initial_len);
 
-        var transparent_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, 10240);
-        var transparent_indices = try std.ArrayList(u32).initCapacity(allocator, 10240);
+        var transparent_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, initial_len);
+        var transparent_indices = try std.ArrayList(u32).initCapacity(allocator, initial_len);
 
         for (self.blocks, 0..) |slice, x| {
             for (slice, 0..) |col, y| {
@@ -360,15 +361,18 @@ pub const Chunk = struct {
             &transparent_indices,
         }) |value| {
             {
-                var new: @typeInfo(@TypeOf(value)).pointer.child = //
-                    try .initCapacity(
-                        allocator,
-                        value.items.len,
-                    );
-                errdefer new.deinit();
-                new.appendSliceAssumeCapacity(value.items);
-                value.deinit();
-                value.* = new;
+                if (value.items.len < initial_len - 1024) {
+                    std.log.info("Copying to smaller buffer", .{});
+                    var new: @typeInfo(@TypeOf(value)).pointer.child = //
+                        try .initCapacity(
+                            allocator,
+                            value.items.len,
+                        );
+                    errdefer new.deinit();
+                    new.appendSliceAssumeCapacity(value.items);
+                    value.deinit();
+                    value.* = new;
+                }
             }
         }
 

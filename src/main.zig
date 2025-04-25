@@ -994,9 +994,3 @@ fn posLessThan(ctx: Vec3, a: IVec3, b: IVec3) bool {
 
     return dista < distb;
 }
-
-test "Large int" {
-    const a: u1024 = 10;
-
-    try std.testing.expectEqual(10, a);
-}
