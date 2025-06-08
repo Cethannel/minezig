@@ -221,12 +221,12 @@ const mem = std.mem;
 
 pub fn MultiArray(comptime T: type, comptime len: usize) type {
     return extern struct {
-        bytes: [len * @sizeOf(T)]u8 = undefined,
+        bytes: [len * @sizeOf(T)]u8 = @splat(0),
 
         const Self = @This();
 
         pub const empty: Self = .{
-            .bytes = undefined,
+            .bytes = @splat(0),
         };
 
         const Elem = @typeInfo(T).@"struct";

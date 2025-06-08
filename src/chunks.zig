@@ -189,50 +189,6 @@ pub const Chunk = struct {
         return tmp;
     }
 
-    pub fn gen_chunk(chunkPos: IVec3) @This() {
-        var out: @This() = undefined;
-
-        const noise = fastnoise.Noise(f32){
-            .seed = state.seed,
-            .noise_type = .perlin,
-        };
-
-        const stoneId = Blocks.getBlockId("stone").?;
-        const grassId = Blocks.getBlockId("grass").?;
-        const waterId = Blocks.getBlockId("water").?;
-
-        const chunkGlobalPos = chunkToWorldPos(chunkPos);
-
-        for (0..chunkWidth) |x| {
-            for (0..chunkWidth) |z| {
-                const fx: f32 = @floatFromInt(x);
-                const fz: f32 = @floatFromInt(z);
-                const height = noise.genNoise2D(chunkGlobalPos.x + fx, chunkGlobalPos.z + fz);
-                for (0..chunkHeight) |y| {
-                    const fy: f32 = @floatFromInt(y);
-
-                    const ny: f32 = (fy - fHalfChunkHeight) / fHalfChunkHeight;
-
-                    const dy = ny - height;
-
-                    if (dy < -0.1) {
-                        out.blocks[x][y][z].id = stoneId;
-                    } else if (dy >= -0.1 and dy <= 0.1) {
-                        out.blocks[x][y][z].id = grassId;
-                    } else {
-                        if (y < 128) {
-                            out.blocks[x][y][z].id = waterId;
-                        } else {
-                            out.blocks[x][y][z].id = .Air;
-                        }
-                    }
-                }
-            }
-        }
-
-        return out;
-    }
-
     pub noinline fn gen_mesh(
         self: *const @This(),
         neighbor_sides: Sides,
@@ -310,10 +266,10 @@ pub const Chunk = struct {
                                 continue :face;
                             }
 
-                            const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
+                            const blockStruct = Blocks.getBlockOrUnkownFromId(block.id);
 
                             const indexOffset = if (blockStruct.transparent) transparent_maxOffset else solid_maxOffset;
-                            const vert = try state.blocksArr.items[@intFromEnum(block.id)].gen_vertices_sides(
+                            const vert = try blockStruct.gen_vertices_sides(
                                 .{
                                     .side = @enumFromInt(index1),
                                     .pos = zlm.vec3(
@@ -371,7 +327,6 @@ pub const Chunk = struct {
         }) |value| {
             {
                 if (value.items.len < initial_len - 1024) {
-                    std.log.info("Copying to smaller buffer", .{});
                     var new: @typeInfo(@TypeOf(value)).pointer.child = //
                         try .initCapacity(
                             allocator,
@@ -401,7 +356,12 @@ pub const Chunk = struct {
     }
 
     pub fn gen_sides(self: *const @This()) Sides {
-        var out: Sides = undefined;
+        var out: Sides = .{
+            .neg_z = @splat(@splat(@enumFromInt(0xFF))),
+            .neg_x = @splat(@splat(@enumFromInt(0xFF))),
+            .z = @splat(@splat(@enumFromInt(0xFF))),
+            .x = @splat(@splat(@enumFromInt(0xFF))),
+        };
 
         for (0..chunkWidth) |val| {
             for (0..chunkHeight) |y| {
@@ -560,7 +520,7 @@ pub const OldChunkMap = struct {
     }
 
     noinline fn genNeigbors(self: *const @This(), chunkPos: IVec3) Sides {
-        var out: Sides = undefined;
+        var out: Sides = .AllAir;
 
         inline for ([_][]const u8{ "x", "z" }) |dir| {
             inline for ([_]i64{ 1, -1 }) |offset| {
@@ -864,6 +824,13 @@ fn outRangeDel(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
         return;
     }
 
+    if (state.chunkMap.fetchRemove(toGenPos)) |kv| {
+        _ = kv;
+        if (@hasDecl(Chunk, "deinit")) {
+            @compileError("Add deinit here you dummy");
+        }
+    }
+
     if (state.solidMeshMap.fetchRemove(toGenPos)) |kv| {
         var chunk = kv.value;
         chunk.deinit();
@@ -1162,7 +1129,7 @@ pub fn genMeshSides(
     pos: IVec3,
     neighbors: NeighborChunks,
 ) !void {
-    var out: Sides = undefined;
+    var out: Sides = Sides.AllAir;
     var chunk = state.chunkMap.get(pos) orelse return;
 
     inline for ([_][]const u8{ "x", "z" }) |dir| {

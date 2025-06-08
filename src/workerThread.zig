@@ -31,7 +31,8 @@ var blockUpdateQueue: utils.mspc(utils.IVec3) = undefined;
 const ChunkMap = std.AutoHashMap(IVec3, chunks.Chunk);
 
 pub fn workerThread() void {
-    var arena = std.heap.ArenaAllocator.init(state.allocator);
+    var dalloc = std.heap.DebugAllocator(.{}){};
+    var arena = std.heap.ArenaAllocator.init(dalloc.allocator());
     defer arena.deinit();
     const allocator = arena.allocator();
     var chunkMap = ChunkMap.init(allocator);
@@ -42,7 +43,7 @@ pub fn workerThread() void {
 
     const frameTime = std.time.ns_per_s / 20;
 
-    var updates = std.ArrayList(utils.IVec3).init(state.allocator);
+    var updates = std.ArrayList(utils.IVec3).init(allocator);
     defer updates.clearAndFree();
 
     while (!state.close.load(.acquire)) {

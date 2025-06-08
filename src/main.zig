@@ -451,6 +451,7 @@ noinline fn recvWorker() !void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
         switch (msg) {
             .NewChunk => |nc| {
+                _ = state.chunksInFlightSet.remove(nc.pos);
                 try state.chunkMap.put(nc.pos, nc.chunk);
                 try chunks.regenNeighborMeshes(nc.pos);
                 try chunks.mark_chunk_for_regen(nc.pos);
@@ -550,9 +551,13 @@ noinline fn worldRender() !void {
 
 inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVec3) !void {
     if (state.chunkMap.getPtr(pos.*)) |chunk| {
-        std.debug.assert(chunk.uuid == mesh.uuid);
+        if (chunk.uuid != mesh.uuid) {
+            clear_meshes(pos.*);
+            return;
+        }
     } else {
-        std.debug.panic("Failed to find chunk for mesh at: {}", .{pos});
+        clear_meshes(pos.*);
+        return;
     }
     if (mesh.inner.buffers) |buffs| {
         state.bind.vertex_buffers[0] = buffs.vertexBuffer;
@@ -928,6 +933,9 @@ fn defaultBlocks() !void {
                     .file = "water_still.png",
                 },
             )).to_block_transparent("water"),
+            try (try blocks.Cube.init_all(state.allocator, .{
+                .file = "Unkown.png",
+            })).to_block_transparent("unkown"),
         },
     );
 }
@@ -941,7 +949,9 @@ fn registerBlockUpdate(blockName: []const u8, callback: blocks.Block.blockUpdate
         std.log.err("Failed to find block with name: {s}", .{blockName});
         return;
     };
-    state.blocksArr.items[@intFromEnum(blockId)].inner_block_update = callback;
+    if (blocks.getBlockFromIdPtr(blockId)) |block| {
+        block.inner_block_update = callback;
+    }
 }
 
 pub fn ivec3ToVec3(input: IVec3) Vec3 {

@@ -1054,6 +1054,22 @@ pub fn getBlockFromId(id: chunks.BlockId) ?Block {
     return state.blocksArr.items[@intFromEnum(id)];
 }
 
+pub fn getBlockOrUnkownFromId(id: chunks.BlockId) Block {
+    if (state.blocksArr.items.len <= @intFromEnum(id)) {
+        return state.blocksArr.items[@intFromEnum(getBlockId("unkown").?)];
+    }
+
+    return state.blocksArr.items[@intFromEnum(id)];
+}
+
+pub fn getBlockFromIdPtr(id: chunks.BlockId) ?*Block {
+    if (state.blocksArr.items.len <= @intFromEnum(id)) {
+        return null;
+    }
+
+    return &state.blocksArr.items[@intFromEnum(id)];
+}
+
 fn generic_get_textures_names(self: anytype, allocator: *const std.mem.Allocator) !*[][]const u8 {
     const outPtr = try allocator.create([][]const u8);
     errdefer allocator.destroy(outPtr);
