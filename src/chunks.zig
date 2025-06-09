@@ -757,7 +757,7 @@ pub const Mesh = struct {
             .data = sg.asRange(self.vertices.items),
         });
         const indexBuffer = sg.makeBuffer(.{
-            .type = .INDEXBUFFER,
+            .usage = .{ .index_buffer = true },
             .data = sg.asRange(self.indices.items),
         });
 

@@ -56,7 +56,7 @@ pub const Crosshair = struct {
         });
 
         out.indexBuffer = sg.makeBuffer(.{
-            .type = .INDEXBUFFER,
+            .usage = .{ .index_buffer = true },
             .data = sg.asRange(out.indices[0..]),
         });
 

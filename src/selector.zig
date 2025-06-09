@@ -64,7 +64,7 @@ pub const Selector = struct {
         out.indices.appendSliceAssumeCapacity(&baseIndices);
 
         out.indexBuffer = sg.makeBuffer(.{
-            .type = .INDEXBUFFER,
+            .usage = .{ .index_buffer = true },
             .data = sg.asRange(out.indices.items),
         });
 
