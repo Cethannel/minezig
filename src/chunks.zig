@@ -1,6 +1,6 @@
 const std = @import("std");
 const root = @import("main.zig");
-const shd = @import("shaders/cube.glsl.zig");
+const shd = @import("cube.glsl");
 
 const config = @import("config");
 

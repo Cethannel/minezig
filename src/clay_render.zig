@@ -16,8 +16,8 @@ pub fn measureText(
 ) clay.Dimensions {
     _ = context;
     return clay.Dimensions{
-        .w = text.len * config.font_size,
-        .h = config.font_size,
+        .w = @floatFromInt(text.len * config.font_size),
+        .h = @floatFromInt(config.font_size),
     };
 }
 
@@ -25,7 +25,7 @@ pub fn clayRaylibRender(
     render_commands: *clay.ClayArray(clay.RenderCommand),
     allocator: std.mem.Allocator,
 ) void {
-    var i = 0;
+    var i: usize = 0;
     _ = allocator;
     while (i < render_commands.length) : (i += 1) {
         const render_command = clay.renderCommandArrayGet(render_commands, @intCast(i));
@@ -42,12 +42,12 @@ pub fn clayRaylibRender(
                     textData.text_color[3],
                 );
                 sdtx.font(textData.font_id);
-                sdtx.sdtx_puts(textData.string_contents.base_chars);
+                const text: [*:0]const u8 = @ptrCast(textData.string_contents.base_chars);
+                sdtx.print("{s}", .{text});
             },
             .rectangle => {
                 const rectData = render_command.render_data.rectangle;
-                var transform = zlm.Mat4.identity;
-                transform = transform.createTranslation(.{
+                const transform = zlm.Mat4.createTranslation(.{
                     .x = bounding_box.x,
                     .y = bounding_box.y,
                     .z = 0,
@@ -56,16 +56,18 @@ pub fn clayRaylibRender(
                 const box: shape.Box = .{
                     .width = bounding_box.width,
                     .height = bounding_box.height,
-                    .transform = transform,
+                    .transform = .{
+                        .m = transform.fields,
+                    },
                     .color = color,
                 };
 
-                const vertices: [128]shape.Vertex = undefined;
+                const vertices: [128]shape.Vertex = @splat(.{});
                 const indices: [16]u16 = undefined;
                 var buf = shape.Buffer{
                     .valid = true,
-                    .vertices = .{ .buffer = shape.asRange(vertices) },
-                    .indices = .{ .buffer = shape.asRange(indices) },
+                    .vertices = .{ .buffer = shape.asRange(&vertices) },
+                    .indices = .{ .buffer = shape.asRange(&indices) },
                 };
 
                 buf = shape.buildBox(buf, box);

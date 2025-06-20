@@ -1,4 +1,4 @@
-const shd = @import("shaders/crosshair.glsl.zig");
+const shd = @import("crosshair.glsl");
 
 const sokol = @import("sokol");
 const sg = sokol.gfx;

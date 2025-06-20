@@ -40,9 +40,8 @@ const zlm = @import("zlm");
 const Vec3 = zlm.Vec3;
 const mat4 = zlm.Mat4;
 
-//const shd = @import("shaders/triangle.glsl.zig");
 const shd = @import("cube.glsl");
-const selectorShd = @import("shaders/selector.glsl.zig");
+const selectorShd = @import("selector.glsl");
 
 const blocks = @import("blocks.zig");
 
@@ -81,6 +80,7 @@ const State = struct {
     lockedMouse: bool = false,
     mouseX: f32 = 0.0,
     mouseY: f32 = 0.0,
+    mouse_down: bool = false,
     controllerMouseX: f32 = 0.0,
     controllerMouseY: f32 = 0.0,
     text_pass_action: sg.PassAction = .{},
@@ -649,6 +649,67 @@ noinline fn imguiPass() !void {
     ig.igEnd();
 }
 
+const sidebar_item_layout: clay.LayoutConfig = .{ .sizing = .{ .w = .grow, .h = .fixed(50) } };
+
+const light_grey: clay.Color = .{ 224, 215, 210, 255 };
+const red: clay.Color = .{ 168, 66, 28, 255 };
+const orange: clay.Color = .{ 225, 138, 50, 255 };
+const white: clay.Color = .{ 250, 250, 255, 255 };
+
+fn sidebarItemComponent(index: u32) void {
+    clay.UI()(.{
+        .id = .IDI("SidebarBlob", index),
+        .layout = sidebar_item_layout,
+        .background_color = orange,
+    })({});
+}
+
+fn uiLayout() clay.ClayArray(clay.RenderCommand) {
+    clay.beginLayout();
+
+    clay.UI()(.{
+        .id = .ID("OuterContainer"),
+        .layout = .{ .direction = .left_to_right, .sizing = .grow, .padding = .all(16), .child_gap = 16 },
+        .background_color = white,
+    })({
+        clay.UI()(.{
+            .id = .ID("SideBar"),
+            .layout = .{
+                .direction = .top_to_bottom,
+                .sizing = .{ .h = .grow, .w = .fixed(300) },
+                .padding = .all(16),
+                .child_alignment = .{ .x = .center, .y = .top },
+                .child_gap = 16,
+            },
+            .background_color = light_grey,
+        })({
+            clay.UI()(.{
+                .id = .ID("ProfilePictureOuter"),
+                .layout = .{ .sizing = .{ .w = .grow }, .padding = .all(16), .child_alignment = .{ .x = .left, .y = .center }, .child_gap = 16 },
+                .background_color = red,
+            })({
+                clay.UI()(.{
+                    .id = .ID("ProfilePicture"),
+                    .layout = .{ .sizing = .{ .h = .fixed(60), .w = .fixed(60) } },
+                })({});
+                clay.text("Clay - UI Library", .{ .font_size = 24, .color = light_grey });
+            });
+
+            for (0..5) |i| sidebarItemComponent(@intCast(i));
+        });
+
+        clay.UI()(.{
+            .id = .ID("MainContent"),
+            .layout = .{ .sizing = .grow },
+            .background_color = light_grey,
+        })({
+            //...
+        });
+    });
+
+    return clay.endLayout();
+}
+
 noinline fn playerMovement() !void {
     const dt: f32 = @floatCast(sapp.frameDuration() * 60);
 
@@ -787,6 +848,7 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
             }
         },
         .MOUSE_DOWN => {
+            state.mouse_down = true;
             if (sapp.mouseLocked()) {
                 switch (event.mouse_button) {
                     .LEFT => {
@@ -817,10 +879,13 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
                 }
             }
         },
+        .MOUSE_UP => {
+            state.mouse_down = false;
+        },
         .MOUSE_MOVE => {
             if (sapp.mouseLocked()) {
-                state.mouseX += event.mouse_dx * state.sensitivity;
-                state.mouseY += event.mouse_dy * state.sensitivity;
+                state.mouseX += event.mouse_x;
+                state.mouseY += event.mouse_y;
 
                 if (state.initialMouse) {
                     state.initialMouse = false;
