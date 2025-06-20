@@ -1,5 +1,5 @@
 const std = @import("std");
-pub const shd = @import("shaders/selector.glsl.zig");
+pub const shd = @import("selector.glsl");
 
 const util = @import("utils.zig");
 

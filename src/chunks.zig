@@ -201,8 +201,14 @@ pub const Chunk = struct {
         var transparent_maxOffset: u32 = 0;
 
         const initial_len = 10240;
-        var solid_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, initial_len);
-        var solid_indices = try std.ArrayList(u32).initCapacity(allocator, initial_len);
+        var solid_vertices = try std.ArrayList(root.Vertex).initCapacity(
+            allocator,
+            initial_len,
+        );
+        var solid_indices = try std.ArrayList(u32).initCapacity(
+            allocator,
+            initial_len,
+        );
 
         var transparent_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, initial_len);
         var transparent_indices = try std.ArrayList(u32).initCapacity(allocator, initial_len);
@@ -954,8 +960,8 @@ fn should_skip_side(
         return false;
     }
 
-    const blockStruct = state.blocksArr.items[@intFromEnum(block.id)];
-    const neighborStruct = state.blocksArr.items[@intFromEnum(neighbor.id)];
+    const blockStruct = Blocks.getBlockOrUnkownFromId(block.id);
+    const neighborStruct = Blocks.getBlockOrUnkownFromId(neighbor.id);
 
     if (blockStruct.transparent != neighborStruct.transparent) {
         return false;

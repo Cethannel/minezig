@@ -41,7 +41,7 @@ const Vec3 = zlm.Vec3;
 const mat4 = zlm.Mat4;
 
 //const shd = @import("shaders/triangle.glsl.zig");
-const shd = @import("shaders/cube.glsl.zig");
+const shd = @import("cube.glsl");
 const selectorShd = @import("shaders/selector.glsl.zig");
 
 const blocks = @import("blocks.zig");
@@ -103,7 +103,11 @@ const State = struct {
     pitch: f32 = -180,
     yaw: f32 = 90.0,
 
+    fov: f32 = 60.0,
+
     initialMouse: bool = true,
+
+    enable_frustum_culling: bool = true,
 
     sensitivity: f32 = 0.1,
 
@@ -564,12 +568,48 @@ inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVe
         state.bind.index_buffer = buffs.indexBuffer;
         sg.applyBindings(state.bind);
 
+        const worldPos = chunks.chunkToWorldPos(pos.*);
+
+        const mvp = computeVsParams(
+            worldPos.x,
+            worldPos.y,
+            worldPos.z,
+        );
+
+        if (state.enable_frustum_culling //
+        and worldPos.swizzle("xz").distance2(state.cameraPos.swizzle("xz")) //
+            > comptime (32 * 32))
+        {
+            const aabb = util.AABB{
+                .min = worldPos,
+                .max = worldPos.add(.{
+                    .x = chunks.chunkWidth,
+                    .y = chunks.chunkHeight,
+                    .z = chunks.chunkWidth,
+                }),
+            };
+            const tan_fov = @tan(0.5 * zlm.toRadians(state.fov + 10));
+            const aspect = sapp.widthf() / sapp.heightf();
+            const frustrum: util.CullingFrustum = .{
+                .near_right = aspect * near * tan_fov,
+                .near_top = near * tan_fov,
+                .near_plane = -near,
+                .far_plane = -far,
+            };
+            const view = mat4.createLookAt(
+                state.cameraPos,
+                state.cameraPos.add(state.cameraFront),
+                state.cameraUp,
+            );
+            const model = mat4.createTranslationXYZ(worldPos.x, worldPos.y, worldPos.z);
+            const transform = model.mul(view);
+            if (!util.SATVisibilityTest(frustrum, transform, aabb)) {
+                return;
+            }
+        }
+
         const vs_params = shd.VsParams{
-            .mvp = computeVsParams(
-                @floatFromInt(pos.x * 16),
-                @floatFromInt(pos.y * 16),
-                @floatFromInt(pos.z * 16),
-            ),
+            .mvp = mvp,
         };
         sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
         sg.draw(0, @intCast(mesh.inner.indices.items.len), 1);
@@ -603,6 +643,8 @@ noinline fn imguiPass() !void {
             },
         }) catch unreachable;
     }
+
+    _ = ig.igCheckbox("Toggle culling: ", &state.enable_frustum_culling);
 
     ig.igEnd();
 }
@@ -668,6 +710,7 @@ fn cleanup() callconv(.C) void {
 
     state.sendWorkerThreadQueue.deinit();
     state.recvWorkerThreadQueue.deinit();
+    state.recvChunkMeshQueue.deinit();
     state.chunksInFlightSet.deinit();
     state.genChunkMeshQueue.deinit();
     state.chunkMap.deinit();
@@ -683,11 +726,11 @@ fn cleanup() callconv(.C) void {
     }
 }
 
-pub fn computeVsParams(rx: f32, ry: f32, rz: f32) math.Mat4 {
-    const color = state.colors[KC854];
-    sdtx.font(KC854);
-    sdtx.color3b(color.r, color.g, color.b);
+// Frustum near and far.
+pub const near = 0.01;
+pub const far = 1000;
 
+pub fn computeVsParams(rx: f32, ry: f32, rz: f32) zlm.Mat4 {
     const view = mat4.createLookAt(
         state.cameraPos,
         state.cameraPos.add(state.cameraFront),
@@ -696,10 +739,9 @@ pub fn computeVsParams(rx: f32, ry: f32, rz: f32) math.Mat4 {
 
     const model = mat4.createTranslationXYZ(rx, ry, rz);
     const aspect = sapp.widthf() / sapp.heightf();
-    const proj = mat4.createPerspective(zlm.toRadians(60.0), aspect, 0.01, 1000.0);
+    const proj = mat4.createPerspective(zlm.toRadians(state.fov), aspect, 0.01, 1000.0);
     const mvp = model.mul(view).mul(proj);
-    //return shd.VsParams{ .mvp = mat4.mul(mat4.mul(proj, newView), model) };
-    return math.Mat4.fromZlm(mvp);
+    return mvp;
 }
 
 fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {

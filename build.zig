@@ -56,7 +56,6 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        //.link_libc = true,
     });
 
     if (target.result.os.tag == .windows) {
@@ -66,10 +65,7 @@ pub fn build(b: *std.Build) !void {
     addControllerSupport(b, target, exe, controllerSupport);
     //addWasmSupport(b, target, exe);
 
-    const imports = [_]struct {
-        name: []const u8,
-        dep: *Build.Dependency,
-    }{
+    const imports = [_]Import{
         .{
             .name = "sokol",
             .dep = dep_sokol,
@@ -170,12 +166,29 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 
-    const shaderState = buildShaders(b, target);
+    const shaderState = buildShaders(
+        b,
+        target,
+        exe.root_module,
+        &imports,
+    );
 
     exe.step.dependOn(shaderState);
+
+    const mangohud = b.addSystemCommand(&.{"mangohud"});
+    mangohud.addFileArg(exe.getEmittedBin());
+    mangohud.step.dependOn(&exe.step);
+
+    const mangohud_step = b.step("mangohud", "Run exe with mangohud");
+    mangohud_step.dependOn(&mangohud.step);
 }
 
-fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
+fn buildShaders(
+    b: *Build,
+    target: Build.ResolvedTarget,
+    root_module: *Build.Module,
+    imports: []const Import,
+) *Build.Step {
     const sokol_tools_bin_dir = "tools/";
 
     const shaders_dir = "src/shaders/";
@@ -193,12 +206,15 @@ fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
     const glsl = if (target.result.isDarwinLibC()) "glsl410" else "glsl430";
     const slang = glsl ++ ":metal_macos:hlsl5:glsl300es:wgsl";
     inline for (shaders) |shader| {
+        const in_path = b.path(shaders_dir ++ shader);
         const cmd = b.addSystemCommand(&.{
             shdc_path,
             "-i",
-            shaders_dir ++ shader,
-            "-o",
-            shaders_dir ++ shader ++ ".zig",
+        });
+        cmd.addFileArg(in_path);
+        cmd.addArg("-o");
+        const out = cmd.addOutputFileArg(shader ++ ".zig");
+        cmd.addArgs(&.{
             "-l",
             slang,
             "-f",
@@ -206,6 +222,13 @@ fn buildShaders(b: *Build, target: Build.ResolvedTarget) *Build.Step {
             "--reflection",
         });
         shdc_step.dependOn(&cmd.step);
+        const shader_module = b.createModule(.{
+            .root_source_file = out,
+        });
+        for (imports) |import| {
+            shader_module.addImport(import.name, import.dep.module(import.name));
+        }
+        root_module.addImport(shader, shader_module);
     }
 
     return shdc_step;
@@ -260,3 +283,8 @@ fn addControllerSupport(
         });
     }
 }
+
+const Import = struct {
+    name: []const u8,
+    dep: *Build.Dependency,
+};

@@ -62,7 +62,7 @@ pub const Bounds = extern struct {
         return true;
     }
 
-    pub fn eqlDir(self: Self, other: Self, comptime field: utils.getFieldEnum(zlm.Vec3)) bool {
+    pub fn eqlDir(self: Self, other: Self, comptime field: std.meta.FieldEnum(zlm.Vec3)) bool {
         return @field(self.min, @tagName(field)) == @field(other.min, @tagName(field)) and
             @field(self.max, @tagName(field)) == @field(other.max, @tagName(field));
     }
