@@ -325,27 +325,6 @@ pub const Chunk = struct {
             }
         }
 
-        inline for (.{
-            &solid_vertices,
-            &solid_indices,
-            &transparent_vertices,
-            &transparent_indices,
-        }) |value| {
-            {
-                if (value.items.len < initial_len - 1024) {
-                    var new: @typeInfo(@TypeOf(value)).pointer.child = //
-                        try .initCapacity(
-                            allocator,
-                            value.items.len,
-                        );
-                    errdefer new.deinit();
-                    new.appendSliceAssumeCapacity(value.items);
-                    value.deinit();
-                    value.* = new;
-                }
-            }
-        }
-
         vertexCount += solid_vertices.items.len;
         chunkCount += 1;
 

@@ -142,8 +142,6 @@ const State = struct {
         .{ .r = 0x4c, .g = 0xaf, .b = 0x50 },
     },
 
-    gpa: GPA = undefined,
-
     renderDistance: u8 = 16,
 
     textureMap: std.StringHashMap(u32) = undefined,
@@ -194,8 +192,24 @@ pub fn main() !void {
     var gpa = State.GPA{
         .requested_memory_limit = 8 * 1024 * 1024 * 1024,
     };
-    state.allocator = gpa.allocator();
-    state.gpa = gpa;
+
+    try start(gpa.allocator());
+
+    std.log.info("Total memory requested: {}", .{
+        gpa.total_requested_bytes,
+    });
+
+    std.log.info("Chunks vertex average: {}", .{
+        chunks.vertexCount / chunks.chunkCount,
+    });
+
+    if (gpa.deinit() == .leak) {
+        std.log.err("Memory leak", .{});
+    }
+}
+
+pub fn start(allocator: std.mem.Allocator) !void {
+    state.allocator = allocator;
 
     sapp.run(.{
         .init_cb = init,
@@ -210,18 +224,6 @@ pub fn main() !void {
         .logger = .{ .func = slog.func },
         .swap_interval = 0,
     });
-
-    std.log.info("Total memory requested: {}", .{
-        gpa.total_requested_bytes,
-    });
-
-    std.log.info("Chunks vertex average: {}", .{
-        chunks.vertexCount / chunks.chunkCount,
-    });
-
-    if (gpa.deinit() == .leak) {
-        std.log.err("Memory leak", .{});
-    }
 }
 
 fn init() callconv(.C) void {
@@ -427,7 +429,6 @@ fn frame() callconv(.C) void {
         sdtx.print("Hello '{s}'!\n", .{"there"});
     }
 
-    sdtx.print("Currently using: {}", .{state.gpa.total_requested_bytes});
     sdtx.font(KC854);
     sdtx.color3b(255, 128, 0);
 
@@ -588,7 +589,7 @@ inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVe
                     .z = chunks.chunkWidth,
                 }),
             };
-            const tan_fov = @tan(0.5 * zlm.toRadians(state.fov + 10));
+            const tan_fov = @tan(0.5 * zlm.toRadians(state.fov + 30));
             const aspect = sapp.widthf() / sapp.heightf();
             const frustrum: util.CullingFrustum = .{
                 .near_right = aspect * near * tan_fov,

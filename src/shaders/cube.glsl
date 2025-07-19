@@ -44,9 +44,17 @@ void main() {
     if (text.r == text.g && text.g == text.b) {
         outColor *= vec4(modifierColor, 1.0);
     }
-    if (text.r == text.g) {
-        outColor *= vec4(normal, 1.0);
+    float modifier = 1.0;
+    if (normal.x != 0.0) {
+    	modifier = 0.9;
     }
+    if (normal.y != 0.0) {
+    	modifier = 0.8;
+    }
+    if (normal.z != 0.0) {
+    	modifier = 0.85;
+    }
+    outColor.rgb *= modifier;
     frag_color = outColor;
 }
 #pragma sokol @end
