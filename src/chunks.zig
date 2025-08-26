@@ -602,11 +602,11 @@ pub fn chunkData(comptime T: type) type {
 
         const Self = @This();
 
-        pub usingnamespace if (@hasDecl(T, "deinit")) struct {
-            pub fn deinit(self: *Self) void {
+        pub fn deinit(self: *Self) void {
+            if (@hasDecl(T, "deinit")) {
                 self.inner.deinit();
             }
-        } else struct {};
+        }
     };
 }
 

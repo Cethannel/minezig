@@ -47,6 +47,10 @@
             .url = "git+https://github.com/deckarep/ziglang-set.git#1907fc6cd76caace357091f6e229cb417677b522",
             .hash = "ziglangSet-0.0.1-VUjv0poUAgCNnJ8mjuXpZ81KSDap5Nmd_WLb7hFRS18f",
         },
+        .zenbt = .{
+            .url = "git+https://github.com/Cethannel/zenbt.git#16afc308ec41912f3c07d609a75ac795376cafba",
+            .hash = "zenbt-0.0.0-05HPxYDUBAC6MPYdXoG_oA8nq8oiRtaRWQiVP9bBNV5z",
+        },
     },
     .paths = .{
         "build.zig",
