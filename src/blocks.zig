@@ -72,6 +72,69 @@ pub const BoundsParams = extern struct {
     selfBlock: chunks.Block,
 };
 
+pub fn MultiOptional(comptime T: type) type {
+    return struct {
+        data: std.AutoHashMap(chunks.BlockId, std.ArrayList(T)),
+
+        const Self = @This();
+
+        pub fn deinit(self: *Self) void {
+            var data_iter = self.data.iterator();
+            while (data_iter.next()) |entry| {
+                if (@hasDecl(T, "deinit")) {
+                    for (entry.value_ptr.items) |item| {
+                        item.deinit();
+                    }
+                }
+                entry.value_ptr.deinit();
+            }
+
+            self.data.deinit();
+        }
+    };
+}
+
+pub const BlockData = struct {
+    allocator: std.mem.Allocator,
+    free_inner_funcs: std.ArrayList(
+        *const fn (
+            allocator: *const std.mem.Allocator,
+            inner: *anyopaque,
+        ) callconv(.C) void,
+    ),
+    block_names: std.ArrayList([]const u8),
+    transparents: std.ArrayList(bool),
+    get_texture_names: std.ArrayList(Block.getTextureNames),
+    gen_vertices_sides: std.ArrayList(Block.genVerticesSidesFn),
+    block_updates: MultiOptional(Block.blockUpdate),
+    should_generate_side: MultiOptional(Block.shouldGenerateSide),
+    bounds: std.ArrayList(Block.boundsFn),
+    deinits: std.ArrayList(Block.deinitFn),
+    blocks: std.ArrayList(*anyopaque),
+
+    const Self = @This();
+
+    pub fn init() Self {}
+
+    pub fn deinit(self: *Self) void {
+        for (self.deinits.items, 0..) |deinit_fn, i| {
+            deinit_fn(self.blocks.items[i]);
+        }
+
+        for (self.blocks.items) |block| {
+            self.allocator.destroy(block);
+        }
+
+        for (self.block_names.items) |block_name| {
+            self.allocator.free(block_name);
+        }
+
+        inline for (std.meta.fields(Self)) |field| {
+            @field(self, field.name).deinit();
+        }
+    }
+};
+
 pub const Block = extern struct {
     pub const getTextureNames = *const fn (
         self: *const anyopaque,
