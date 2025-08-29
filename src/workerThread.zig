@@ -86,7 +86,7 @@ pub fn workerThread() void {
                     });
                 } else {
                     std.log.err(
-                        "Failed to get block with id: {f}",
+                        "Failed to get block with id: {d}",
                         .{@intFromEnum(block.id)},
                     );
                 }

@@ -1,5 +1,5 @@
 const std = @import("std");
-const zigimg = @import("zigimg");
+const zignal = @import("zignal");
 
 const root = @import("main.zig");
 
@@ -11,10 +11,6 @@ const math = @import("math.zig");
 
 const state = &root.state;
 
-pub fn loadImage(path: []const u8, allocator: std.mem.Allocator) [][3]u8 {
-    zigimg.Image.fromFilePath(allocator, path);
-}
-
 const imageSize = 32;
 
 const Color = packed struct {
@@ -25,39 +21,36 @@ const Color = packed struct {
 };
 
 pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) ![]u32 {
-    var out = try std.array_list.Managed(u32).initCapacity(allocator, textures.len * 32 * 32);
-    defer out.deinit();
+    var out = try zignal.Image(zignal.Rgba).init(allocator, 32 * textures.len, 32);
+    errdefer out.deinit(allocator);
 
+    var top: usize = 0;
     for (textures) |textFile| {
         std.log.info("Loading image {s}", .{textFile});
-        var image = try zigimg.Image.fromFilePath(allocator, textFile);
-        try image.convert(.rgba32);
+        var image = try zignal.png.load(zignal.Rgba, allocator, textFile);
 
-        for (image.pixels.rgba32) |pixel| {
-            const color: Color = .{
-                .a = pixel.a,
-                .r = pixel.r,
-                .g = pixel.g,
-                .b = pixel.b,
-            };
+        out.insert(image, .{
+            .l = 0,
+            .t = @floatFromInt(top),
+            .b = @floatFromInt(top + 31),
+            .r = 31,
+        }, 0.0, .nearest_neighbor);
 
-            try out.append(@bitCast(color));
-        }
-
-        image.deinit();
+        image.deinit(allocator);
+        top += 32;
     }
 
-    return out.toOwnedSlice();
+    return @as([*]u32, @ptrCast(out.data.ptr))[0..out.data.len];
 }
 
 const basePath = "assets/textures/";
 
 pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
-    var out = std.array_list.Managed([]const u8).init(state.allocator);
-    defer out.deinit();
+    var out = std.ArrayList([]const u8).empty;
+    defer out.deinit(state.allocator);
 
     for (blocksToRegister, 0..) |block, i| {
-        std.log.info("Block[{d}]: `{s}`", .{ i, block.blockName.* });
+        std.log.info("Block[{}]: `{s}`", .{ i, block.blockName.* });
         if (i == 0) {
             continue;
         }
@@ -71,15 +64,15 @@ pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
                 const newName = try state.allocator.alloc(u8, basePath.len + name.len);
                 @memcpy(newName[0..basePath.len], basePath);
                 @memcpy(newName[basePath.len..], name);
-                try out.append(newName);
+                try out.append(state.allocator, newName);
             }
         }
     }
 
-    return out.toOwnedSlice();
+    return out.toOwnedSlice(state.allocator);
 }
 
-fn hasTextureName(arr: std.array_list.Managed([]const u8), name: []const u8) bool {
+fn hasTextureName(arr: std.ArrayList([]const u8), name: []const u8) bool {
     for (arr.items) |value| {
         if (std.mem.eql(u8, value[basePath.len..], name)) {
             return true;

@@ -42,7 +42,7 @@ void main() {
     vec4 text = texture(sampler2D(tex, smp), uv);
     vec4 outColor = text;
     if (text.r == text.g && text.g == text.b) {
-        outColor *= vec4(modifierColor, 1.0);
+        outColor *= max(vec4(modifierColor, 1.0), vec4(1.0));
     }
     float modifier = 1.0;
     if (normal.x != 0.0) {

@@ -116,6 +116,8 @@ const State = struct {
     sendWorkerThreadQueue: util.mspc(workerThread.toWorkerThreadMessage) = undefined,
     recvWorkerThreadQueue: util.mspc(workerThread.fromWorkerThreadMessage) = undefined,
 
+    chunkPool: std.Thread.Pool = undefined,
+
     recvChunkMeshQueue: util.mspc(struct { rc: struct {
         solid: chunks.Mesh,
         transparent: chunks.Mesh,
@@ -285,7 +287,13 @@ fn init() callconv(.c) void {
         .height = @intCast(state.atlas.len / 32),
     };
     img_desc.data.subimage[0][0] = sg.asRange(state.atlas);
-    state.bind.images[shd.IMG_tex] = sg.makeImage(img_desc);
+    state.bind.views[shd.VIEW_tex] = sg.makeView(.{
+        .texture = .{
+            .image = sg.makeImage(img_desc),
+        },
+    });
+    //state.bind.images[shd.IMG_tex] = sg.makeImage(img_desc);
+    logAtlas() catch unreachable;
 
     state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
@@ -349,6 +357,10 @@ fn init() callconv(.c) void {
     pip_desc.layout.attrs[shd.ATTR_texcube_normal0].format = .FLOAT3;
     pip_desc.layout.attrs[shd.ATTR_texcube_modifierColor0].format = .FLOAT3;
     state.pip = sg.makePipeline(pip_desc);
+
+    state.chunkPool.init(.{
+        .allocator = state.allocator,
+    }) catch unreachable;
 
     var sdtx_desc: sdtx.Desc = .{ .logger = .{ .func = slog.func } };
     sdtx_desc.fonts[KC854] = sdtx.fontKc854();
@@ -517,11 +529,10 @@ noinline fn genMeshes() !void {
                 }
             }
         }
-        const thread = try std.Thread.spawn(.{}, chunks.genMeshSides, .{
+        try state.chunkPool.spawn(genMeshSidesWrapper, .{
             chunkPos,
             neighbors,
         });
-        thread.detach();
     }
 }
 
@@ -782,6 +793,8 @@ fn cleanup() callconv(.c) void {
     state.chunkGenFuncs.deinit();
     state.allocator.free(state.atlas);
     sg.shutdown();
+
+    state.chunkPool.deinit();
 
     if (config.controllerSupport) {
         c.Gamepad_shutdown();
@@ -1153,4 +1166,23 @@ fn posLessThan(ctx: Vec3, a: IVec3, b: IVec3) bool {
     const distb = ctx.distance2(chunks.chunkToWorldPos(b));
 
     return dista < distb;
+}
+
+fn logAtlas() !void {
+    var file = try std.fs.cwd().createFile("Atlas.raw", .{});
+    std.debug.print("Atlas height: {d}", .{state.atlas.len / 32});
+    var buffer: [1024 * 1024]u8 = @splat(0);
+    var writer = file.writer(&buffer);
+    try writer.interface.writeSliceEndian(u32, state.atlas, .little);
+    try writer.interface.flush();
+    file.close();
+}
+
+fn genMeshSidesWrapper(
+    pos: IVec3,
+    neighbors: chunks.NeighborChunks,
+) void {
+    chunks.genMeshSides(pos, neighbors) catch |err| {
+        std.log.err("Failed to gen mesh: {}", .{err});
+    };
 }
