@@ -172,7 +172,7 @@ fn otherThread(data: []const dataType, queue: *mspc(dataType)) void {
 
 pub fn binaryInsertAssumeCapacity(
     comptime T: type,
-    arr: *std.ArrayList(T),
+    arr: *std.array_list.Managed(T),
     context: anytype,
     comptime lessThanFn: fn (@TypeOf(context), lhs: T, rhs: T) bool,
     value: T,
@@ -200,7 +200,7 @@ test "Multi thread test" {
 
     var thread = try std.Thread.spawn(.{}, otherThread, .{ @as([]const dataType, values[0..]), &queue });
 
-    var outVals = try std.ArrayList(dataType).initCapacity(alloc, values.len);
+    var outVals = try std.array_list.Managed(dataType).initCapacity(alloc, values.len);
     defer outVals.deinit();
 
     while (!otherDone) {

@@ -74,7 +74,7 @@ pub const BoundsParams = extern struct {
 
 pub fn MultiOptional(comptime T: type) type {
     return struct {
-        data: std.AutoHashMap(chunks.BlockId, std.ArrayList(T)),
+        data: std.AutoHashMap(chunks.BlockId, std.array_list.Managed(T)),
 
         const Self = @This();
 
@@ -102,15 +102,15 @@ pub const BlockData = struct {
             inner: *anyopaque,
         ) callconv(.c) void,
     ),
-    block_names: std.ArrayList([]const u8),
-    transparents: std.ArrayList(bool),
-    get_texture_names: std.ArrayList(Block.getTextureNames),
-    gen_vertices_sides: std.ArrayList(Block.genVerticesSidesFn),
+    block_names: std.array_list.Managed([]const u8),
+    transparents: std.array_list.Managed(bool),
+    get_texture_names: std.array_list.Managed(Block.getTextureNames),
+    gen_vertices_sides: std.array_list.Managed(Block.genVerticesSidesFn),
     block_updates: MultiOptional(Block.blockUpdate),
     should_generate_side: MultiOptional(Block.shouldGenerateSide),
-    bounds: std.ArrayList(Block.boundsFn),
-    deinits: std.ArrayList(Block.deinitFn),
-    blocks: std.ArrayList(*anyopaque),
+    bounds: std.array_list.Managed(Block.boundsFn),
+    deinits: std.array_list.Managed(Block.deinitFn),
+    blocks: std.array_list.Managed(*anyopaque),
 
     const Self = @This();
 

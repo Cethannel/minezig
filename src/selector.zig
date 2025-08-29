@@ -29,8 +29,8 @@ pub const Vertex = extern struct {
 pub const Selector = struct {
     pos: IVec3 = IVec3.zero,
     place_pos: IVec3 = IVec3.zero,
-    vertices: std.ArrayList(Vertex) = undefined,
-    indices: std.ArrayList(u32) = undefined,
+    vertices: std.array_list.Managed(Vertex) = undefined,
+    indices: std.array_list.Managed(u32) = undefined,
     allocator: std.mem.Allocator = undefined,
     bind: sg.Bindings = .{},
     pip: sg.Pipeline = .{},
@@ -53,14 +53,14 @@ pub const Selector = struct {
         out.allocator = allocator;
         out.pos = IVec3.zero;
 
-        out.vertices = try std.ArrayList(Vertex).initCapacity(allocator, baseVertices.len);
+        out.vertices = try std.array_list.Managed(Vertex).initCapacity(allocator, baseVertices.len);
         out.vertices.appendSliceAssumeCapacity(&baseVertices);
 
         out.vertexBuffer = sg.makeBuffer(.{
             .data = sg.asRange(out.vertices.items),
         });
 
-        out.indices = try std.ArrayList(u32).initCapacity(allocator, baseIndices.len);
+        out.indices = try std.array_list.Managed(u32).initCapacity(allocator, baseIndices.len);
         out.indices.appendSliceAssumeCapacity(&baseIndices);
 
         out.indexBuffer = sg.makeBuffer(.{

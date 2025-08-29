@@ -43,7 +43,7 @@ pub fn workerThread() void {
 
     const frameTime = std.time.ns_per_s / 20;
 
-    var updates = std.ArrayList(utils.IVec3).init(allocator);
+    var updates = std.array_list.Managed(utils.IVec3).init(allocator);
     defer updates.clearAndFree();
 
     while (!state.close.load(.acquire)) {

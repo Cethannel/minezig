@@ -115,8 +115,8 @@ pub const Chunk = struct {
     uuid: uuid.Uuid,
 
     pub const MeshData = struct {
-        vertices: std.ArrayList(root.Vertex),
-        indices: std.ArrayList(u32),
+        vertices: std.array_list.Managed(root.Vertex),
+        indices: std.array_list.Managed(u32),
     };
 
     pub fn eql(self: *const @This(), other: *const @This()) bool {
@@ -201,17 +201,17 @@ pub const Chunk = struct {
         var transparent_maxOffset: u32 = 0;
 
         const initial_len = 10240;
-        var solid_vertices = try std.ArrayList(root.Vertex).initCapacity(
+        var solid_vertices = try std.array_list.Managed(root.Vertex).initCapacity(
             allocator,
             initial_len,
         );
-        var solid_indices = try std.ArrayList(u32).initCapacity(
+        var solid_indices = try std.array_list.Managed(u32).initCapacity(
             allocator,
             initial_len,
         );
 
-        var transparent_vertices = try std.ArrayList(root.Vertex).initCapacity(allocator, initial_len);
-        var transparent_indices = try std.ArrayList(u32).initCapacity(allocator, initial_len);
+        var transparent_vertices = try std.array_list.Managed(root.Vertex).initCapacity(allocator, initial_len);
+        var transparent_indices = try std.array_list.Managed(u32).initCapacity(allocator, initial_len);
 
         for (self.blocks, 0..) |slice, x| {
             for (slice, 0..) |col, y| {
@@ -388,13 +388,13 @@ pub const ChunkMap = std.AutoHashMap(IVec3, Chunk);
 
 pub const OldChunkMap = struct {
     map: std.AutoHashMap(IVec3, RenderChunk),
-    chunkGenFuncs: std.ArrayList(ChunkGenFunc),
+    chunkGenFuncs: std.array_list.Managed(ChunkGenFunc),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) !Self {
-        var chunkGenFuncs: std.ArrayList(ChunkGenFunc) = .init(allocator);
+        var chunkGenFuncs: std.array_list.Managed(ChunkGenFunc) = .init(allocator);
         errdefer chunkGenFuncs.deinit();
 
         try chunkGenFuncs.append(&genTerrain);
@@ -711,8 +711,8 @@ var emptyAllocBuf = std.heap.FixedBufferAllocator.init(&emptyBuf);
 const emptyAlloc = emptyAllocBuf.allocator();
 
 pub const Mesh = struct {
-    vertices: std.ArrayList(root.Vertex) = .init(emptyAlloc),
-    indices: std.ArrayList(u32) = .init(emptyAlloc),
+    vertices: std.array_list.Managed(root.Vertex) = .init(emptyAlloc),
+    indices: std.array_list.Managed(u32) = .init(emptyAlloc),
     buffers: ?struct {
         vertexBuffer: sg.Buffer,
         indexBuffer: sg.Buffer,

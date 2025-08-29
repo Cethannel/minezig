@@ -91,7 +91,7 @@ const State = struct {
     transparentMeshMap: chunks.chunkDataMap(chunks.Mesh) = undefined,
     chunksToRegen: zset.ArraySetManaged(IVec3) = undefined,
 
-    chunkGenFuncs: std.ArrayList(chunks.ChunkGenFunc) = undefined,
+    chunkGenFuncs: std.array_list.Managed(chunks.ChunkGenFunc) = undefined,
 
     cameraPos: Vec3 = Vec3.new(0.0, 129.0, 3.0),
     prevCameraPos: Vec3 = Vec3.new(0.0, 0.0, 0.0),
@@ -131,8 +131,8 @@ const State = struct {
 
     chunksInFlightSet: chunksInFlightT = undefined,
 
-    blocksArr: std.ArrayList(blocks.Block) = undefined,
-    blocksNameArr: std.ArrayList(u8) = undefined,
+    blocksArr: std.array_list.Managed(blocks.Block) = undefined,
+    blocksNameArr: std.array_list.Managed(u8) = undefined,
 
     selectedBlock: c_int = 0,
 
@@ -250,8 +250,8 @@ fn init() callconv(.c) void {
 
     state.textureMap = std.StringHashMap(u32).init(state.allocator);
 
-    state.blocksArr = std.ArrayList(blocks.Block).init(state.allocator);
-    state.blocksNameArr = std.ArrayList(u8).init(state.allocator);
+    state.blocksArr = std.array_list.Managed(blocks.Block).init(state.allocator);
+    state.blocksNameArr = std.array_list.Managed(u8).init(state.allocator);
 
     state.blocksArr.append(blocks.AirBlock) catch unreachable;
 
@@ -311,7 +311,7 @@ fn init() callconv(.c) void {
 
     state.chunksToRegen = zset.ArraySetManaged(IVec3).init(state.allocator);
 
-    state.chunkGenFuncs = std.ArrayList(chunks.ChunkGenFunc).init(state.allocator);
+    state.chunkGenFuncs = std.array_list.Managed(chunks.ChunkGenFunc).init(state.allocator);
     chunks.add_builtin_gen_funcs() catch unreachable;
 
     state.pass_action.colors[0] = .{

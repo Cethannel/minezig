@@ -25,7 +25,7 @@ const Color = packed struct {
 };
 
 pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) ![]u32 {
-    var out = try std.ArrayList(u32).initCapacity(allocator, textures.len * 32 * 32);
+    var out = try std.array_list.Managed(u32).initCapacity(allocator, textures.len * 32 * 32);
     defer out.deinit();
 
     for (textures) |textFile| {
@@ -53,7 +53,7 @@ pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) !
 const basePath = "assets/textures/";
 
 pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
-    var out = std.ArrayList([]const u8).init(state.allocator);
+    var out = std.array_list.Managed([]const u8).init(state.allocator);
     defer out.deinit();
 
     for (blocksToRegister, 0..) |block, i| {
@@ -79,7 +79,7 @@ pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
     return out.toOwnedSlice();
 }
 
-fn hasTextureName(arr: std.ArrayList([]const u8), name: []const u8) bool {
+fn hasTextureName(arr: std.array_list.Managed([]const u8), name: []const u8) bool {
     for (arr.items) |value| {
         if (std.mem.eql(u8, value[basePath.len..], name)) {
             return true;
