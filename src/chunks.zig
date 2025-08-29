@@ -376,7 +376,7 @@ const Sides = struct {
     };
 };
 
-pub const ChunkGenFunc = *const fn (chunk: *Chunk, pos: IVec3) callconv(.C) void;
+pub const ChunkGenFunc = *const fn (chunk: *Chunk, pos: IVec3) callconv(.c) void;
 
 pub fn add_builtin_gen_funcs() !void {
     try state.chunkGenFuncs.append(&genTerrain);
@@ -1010,7 +1010,7 @@ test "GenNeighbors" {
     try std.testing.expectEqualDeep(expected, neihbors);
 }
 
-fn genTerrain(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
+fn genTerrain(chunk: *Chunk, chunkPos: IVec3) callconv(.c) void {
     const noise = fastnoise.Noise(f32){
         .seed = state.seed,
         .noise_type = .perlin,
@@ -1048,7 +1048,7 @@ comptime {
     }
 }
 
-fn genWater(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
+fn genWater(chunk: *Chunk, chunkPos: IVec3) callconv(.c) void {
     _ = chunkPos;
 
     const waterId = Blocks.getBlockId("water").?;
@@ -1069,7 +1069,7 @@ fn genWater(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
     }
 }
 
-fn propGrass(chunk: *Chunk, chunkPos: IVec3) callconv(.C) void {
+fn propGrass(chunk: *Chunk, chunkPos: IVec3) callconv(.c) void {
     _ = chunkPos;
 
     const grassId = Blocks.getBlockId("grass").?;

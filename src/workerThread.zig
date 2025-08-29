@@ -114,7 +114,7 @@ fn getChunk(chunkMap: *ChunkMap, pos: IVec3) !void {
     });
 }
 
-fn blockUpdateCallback(pos: *const utils.IVec3) callconv(.C) void {
+fn blockUpdateCallback(pos: *const utils.IVec3) callconv(.c) void {
     blockUpdateQueue.enqueue(pos.*) catch {
         std.log.err("Failed to trigger block update at: {}", .{pos.*});
     };
@@ -123,7 +123,7 @@ fn blockUpdateCallback(pos: *const utils.IVec3) callconv(.C) void {
 fn setBlockCallback(
     pos: *const utils.IVec3,
     block: *const chunks.Block,
-) callconv(.C) void {
+) callconv(.c) void {
     std.log.info("Setting block at: {}", .{pos.*});
     state.sendWorkerThreadQueue.enqueue(.{
         .SetBlock = .{

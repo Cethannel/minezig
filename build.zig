@@ -3,6 +3,8 @@ const Build = std.Build;
 
 const textures = @import("src/textures.zig");
 
+pub const shdc = @import("shdc");
+
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -36,7 +38,7 @@ pub fn build(b: *std.Build) !void {
         .with_sokol_imgui = true,
     });
 
-    const zigimg_dependency = b.dependency("zigimg", std_args);
+    const zignal_dependency = b.dependency("zignal", std_args);
 
     const zlm = b.dependency("zlm", .{});
 
@@ -51,11 +53,15 @@ pub fn build(b: *std.Build) !void {
     // inject the cimgui header search path into the sokol C library compile step
     dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
 
-    const exe = b.addExecutable(.{
-        .name = "minezig",
+    const exe_mod = b.addModule("minezig", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "minezig",
+        .root_module = exe_mod,
     });
 
     if (target.result.os.tag == .windows) {
@@ -71,8 +77,8 @@ pub fn build(b: *std.Build) !void {
             .dep = dep_sokol,
         },
         .{
-            .name = "zigimg",
-            .dep = zigimg_dependency,
+            .name = "zignal",
+            .dep = zignal_dependency,
         },
         .{
             .name = "cimgui",
@@ -146,9 +152,7 @@ pub fn build(b: *std.Build) !void {
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = exe_mod,
     });
     addControllerSupport(b, target, exe_unit_tests, controllerSupport);
 
@@ -166,7 +170,7 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 
-    const shaderState = buildShaders(
+    const shaderState = try buildShaders(
         b,
         target,
         exe.root_module,
@@ -188,9 +192,7 @@ fn buildShaders(
     target: Build.ResolvedTarget,
     root_module: *Build.Module,
     imports: []const Import,
-) *Build.Step {
-    const sokol_tools_bin_dir = "tools/";
-
+) !*Build.Step {
     const shaders_dir = "src/shaders/";
     const shaders = .{
         "triangle.glsl",
@@ -199,31 +201,26 @@ fn buildShaders(
         "crosshair.glsl",
     };
 
-    const shdc = "sokol-shdc";
-
-    const shdc_path = sokol_tools_bin_dir ++ shdc;
     const shdc_step = b.step("shaders", "Compile shaders (needs ../sokol-tools-bin)");
-    const glsl = if (target.result.isDarwinLibC()) "glsl410" else "glsl430";
-    const slang = glsl ++ ":metal_macos:hlsl5:glsl300es:wgsl";
     inline for (shaders) |shader| {
-        const in_path = b.path(shaders_dir ++ shader);
-        const cmd = b.addSystemCommand(&.{
-            shdc_path,
-            "-i",
+        const in_path: []const u8 = shaders_dir ++ shader;
+        const out_path: []const u8 = shaders_dir ++ shader ++ ".zig";
+        const create_shdc = try shdc.createSourceFile(b, .{
+            .shdc_dep = b.dependency("shdc", .{}),
+            .input = in_path,
+            .output = out_path,
+            .slang = .{
+                .metal_macos = true,
+                .hlsl5 = true,
+                .wgsl = true,
+                .glsl430 = true,
+            },
+            .reflection = true,
         });
-        cmd.addFileArg(in_path);
-        cmd.addArg("-o");
-        const out = cmd.addOutputFileArg(shader ++ ".zig");
-        cmd.addArgs(&.{
-            "-l",
-            slang,
-            "-f",
-            "sokol_zig",
-            "--reflection",
-        });
-        shdc_step.dependOn(&cmd.step);
+        shdc_step.dependOn(create_shdc);
         const shader_module = b.createModule(.{
-            .root_source_file = out,
+            .root_source_file = b.path(out_path),
+            .target = target,
         });
         for (imports) |import| {
             shader_module.addImport(import.name, import.dep.module(import.name));
@@ -254,7 +251,7 @@ fn addControllerSupport(
     if (controllerSupport) {
         compile.addIncludePath(b.path("externalDeps/libstem_gamepad"));
 
-        compile.addCSourceFiles(.{
+        compile.root_module.addCSourceFiles(.{
             .files = &.{
                 "Gamepad_private.c",
             },
@@ -277,7 +274,7 @@ fn addControllerSupport(
             else => @panic("Unkown os"),
         };
 
-        compile.addCSourceFiles(.{
+        compile.root_module.addCSourceFiles(.{
             .files = osFile,
             .root = b.path("externalDeps/libstem_gamepad"),
         });

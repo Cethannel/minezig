@@ -226,7 +226,7 @@ pub fn start(allocator: std.mem.Allocator) !void {
     });
 }
 
-fn init() callconv(.C) void {
+fn init() callconv(.c) void {
     if (config.controllerSupport) {
         c.Gamepad_init();
 
@@ -367,7 +367,7 @@ fn init() callconv(.C) void {
     ) catch unreachable;
 }
 
-fn frame() callconv(.C) void {
+fn frame() callconv(.c) void {
     var frameAlloc = std.heap.ArenaAllocator.init(state.allocator);
     defer frameAlloc.deinit();
     const alloc = frameAlloc.allocator();
@@ -748,7 +748,7 @@ noinline fn playerMovement() !void {
     }
 }
 
-fn cleanup() callconv(.C) void {
+fn cleanup() callconv(.c) void {
     state.close.store(true, .release);
     state.workerThreadHandle.join();
 
@@ -806,7 +806,7 @@ pub fn computeVsParams(rx: f32, ry: f32, rz: f32) zlm.Mat4 {
     return mvp;
 }
 
-fn event_cb(event_arr: [*c]const sapp.Event) callconv(.C) void {
+fn event_cb(event_arr: [*c]const sapp.Event) callconv(.c) void {
     const event = event_arr[0];
 
     _ = simgui.handleEvent(event);
@@ -906,7 +906,7 @@ fn gamepad_buttonDownFunc(
     buttonId: c_uint,
     timestamp: f64,
     context: ?*anyopaque,
-) callconv(.C) void {
+) callconv(.c) void {
     _ = &dev;
     _ = &context;
     _ = &timestamp;
@@ -927,7 +927,7 @@ fn gamepad_buttonUpFunc(
     buttonId: c_uint,
     timestamp: f64,
     context: ?*anyopaque,
-) callconv(.C) void {
+) callconv(.c) void {
     _ = &dev;
     _ = &context;
     _ = &timestamp;
@@ -950,7 +950,7 @@ fn gamepad_axisMovedFunc(
     lastValue: f32,
     timestamp: f64,
     context: ?*anyopaque,
-) callconv(.C) void {
+) callconv(.c) void {
     _ = &dev;
     _ = &context;
     _ = &timestamp;

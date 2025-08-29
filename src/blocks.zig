@@ -14,10 +14,10 @@ pub const BlockUpdateParams = extern struct {
     pub const setBlockCallbackT = *const fn (
         pos: *const utils.IVec3,
         block: *const chunks.Block,
-    ) callconv(.C) void;
+    ) callconv(.c) void;
     pub const blockUpdateCallbackT = *const fn (
         pos: *const utils.IVec3,
-    ) callconv(.C) void;
+    ) callconv(.c) void;
 
     chunksMap: *const std.AutoHashMap(chunks.IVec3, chunks.Chunk),
     pos: *const utils.IVec3,
@@ -100,7 +100,7 @@ pub const BlockData = struct {
         *const fn (
             allocator: *const std.mem.Allocator,
             inner: *anyopaque,
-        ) callconv(.C) void,
+        ) callconv(.c) void,
     ),
     block_names: std.ArrayList([]const u8),
     transparents: std.ArrayList(bool),
@@ -139,33 +139,33 @@ pub const Block = extern struct {
     pub const getTextureNames = *const fn (
         self: *const anyopaque,
         allocator: *const std.mem.Allocator,
-    ) callconv(.C) ?*[][]const u8;
+    ) callconv(.c) ?*[][]const u8;
 
     pub const deinitFn = *const fn (
         self: *anyopaque,
-    ) callconv(.C) void;
+    ) callconv(.c) void;
 
     pub const genVerticesSidesFn = *const fn (
         self: *const anyopaque,
         params: *const GenVerticesSidesParams,
         out: *[4]root.Vertex,
-    ) callconv(.C) bool;
+    ) callconv(.c) bool;
 
     pub const blockUpdate = *const fn (
         self: *const anyopaque,
         params: *const BlockUpdateParams,
-    ) callconv(.C) void;
+    ) callconv(.c) void;
 
     pub const shouldGenerateSide = *const fn (
         self: *const anyopaque,
         params: *const ShouldGenerateSidePrams,
-    ) callconv(.C) bool;
+    ) callconv(.c) bool;
 
     pub const boundsFn = *const fn (
         self: *const anyopaque,
         params: *const BoundsParams,
         bound_out: *Bounds,
-    ) callconv(.C) void;
+    ) callconv(.c) void;
 
     inner: *anyopaque,
     allocator: *const std.mem.Allocator,
@@ -173,7 +173,7 @@ pub const Block = extern struct {
     blockName: *const []const u8,
     transparent: bool = false,
 
-    free_inner: *const fn (allocator: *const std.mem.Allocator, inner: *anyopaque) callconv(.C) void,
+    free_inner: *const fn (allocator: *const std.mem.Allocator, inner: *anyopaque) callconv(.c) void,
     inner_get_textures_names: getTextureNames,
     inner_gen_vertices_sides: genVerticesSidesFn,
     inner_block_update: ?blockUpdate,
@@ -287,7 +287,7 @@ pub const Sides = union(enum) {
 
 fn freeGenerice(t: type) type {
     return struct {
-        fn free(allocator: *const std.mem.Allocator, inner: *anyopaque) callconv(.C) void {
+        fn free(allocator: *const std.mem.Allocator, inner: *anyopaque) callconv(.c) void {
             const thing: *t = @alignCast(@ptrCast(inner));
             allocator.destroy(thing);
         }
@@ -484,7 +484,7 @@ pub const Cube = struct {
     pub fn get_textures_names(
         self: *const Self,
         allocator: *const std.mem.Allocator,
-    ) callconv(.C) ?*[][]const u8 {
+    ) callconv(.c) ?*[][]const u8 {
         return generic_get_textures_names(self, allocator) catch return null;
     }
 
@@ -492,7 +492,7 @@ pub const Cube = struct {
         self: *const Self,
         params: *const BoundsParams,
         bound_out: *Bounds,
-    ) callconv(.C) void {
+    ) callconv(.c) void {
         _ = self;
         _ = params;
         bound_out.min = zlm.Vec3.zero;
@@ -503,7 +503,7 @@ pub const Cube = struct {
         self: *const Self,
         params: *const GenVerticesSidesParams,
         out: *[4]root.Vertex,
-    ) callconv(.C) bool {
+    ) callconv(.c) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
             .TopOthers => |topOthers| {
@@ -535,7 +535,7 @@ pub const Cube = struct {
         );
     }
 
-    pub fn deinit(self: *Self) callconv(.C) void {
+    pub fn deinit(self: *Self) callconv(.c) void {
         switch (self.sides) {
             .All => |sides| {
                 sides.deinit(self.allocator);
@@ -630,7 +630,7 @@ pub const Slab = struct {
         };
     }
 
-    pub fn get_textures_names(self: *const Self, allocator: *const std.mem.Allocator) callconv(.C) ?*[][]const u8 {
+    pub fn get_textures_names(self: *const Self, allocator: *const std.mem.Allocator) callconv(.c) ?*[][]const u8 {
         return generic_get_textures_names(self, allocator) catch return null;
     }
 
@@ -638,7 +638,7 @@ pub const Slab = struct {
         self: *const Self,
         params: *const BoundsParams,
         bound_out: *Bounds,
-    ) callconv(.C) void {
+    ) callconv(.c) void {
         _ = self;
         bound_out.* = innerBounds;
         if (params.selfBlock.variant == 1) {
@@ -651,7 +651,7 @@ pub const Slab = struct {
         self: *const Self,
         params: *const GenVerticesSidesParams,
         out: *[4]root.Vertex,
-    ) callconv(.C) bool {
+    ) callconv(.c) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
             .TopOthers => |topOthers| {
@@ -686,7 +686,7 @@ pub const Slab = struct {
     pub fn should_generate_side(
         self: *const Self,
         params: *const ShouldGenerateSidePrams,
-    ) callconv(.C) bool {
+    ) callconv(.c) bool {
         const neighborBlock = getBlockFromId(params.neighbor.id);
         switch (params.side) {
             .Y => {
@@ -715,7 +715,7 @@ pub const Slab = struct {
         return true;
     }
 
-    pub fn deinit(self: *Self) callconv(.C) void {
+    pub fn deinit(self: *Self) callconv(.c) void {
         switch (self.sides) {
             .All => |sides| {
                 sides.deinit(self.allocator);
@@ -953,7 +953,7 @@ pub const Air = struct {
         self: *const Self,
         params: *const BoundsParams,
         out_bounds: *Bounds,
-    ) callconv(.C) void {
+    ) callconv(.c) void {
         _ = params;
         _ = self;
         _ = out_bounds;
@@ -1014,7 +1014,7 @@ pub const Fluid = struct {
         };
     }
 
-    pub fn get_textures_names(self: *const Self, allocator: *const std.mem.Allocator) callconv(.C) ?*[][]const u8 {
+    pub fn get_textures_names(self: *const Self, allocator: *const std.mem.Allocator) callconv(.c) ?*[][]const u8 {
         return generic_get_textures_names(self, allocator) catch return null;
     }
 
@@ -1022,7 +1022,7 @@ pub const Fluid = struct {
         self: *const Self,
         params: *const BoundsParams,
         bound_out: *Bounds,
-    ) callconv(.C) void {
+    ) callconv(.c) void {
         _ = params;
         _ = self;
         bound_out.* = innerBounds;
@@ -1032,7 +1032,7 @@ pub const Fluid = struct {
         self: *const Self,
         params: *const GenVerticesSidesParams,
         out: *[4]root.Vertex,
-    ) callconv(.C) bool {
+    ) callconv(.c) bool {
         const texInfo = swi: switch (self.sides) {
             .All => |all| all,
             .TopOthers => |topOthers| {
@@ -1071,7 +1071,7 @@ pub const Fluid = struct {
         );
     }
 
-    pub fn deinit(self: *Self) callconv(.C) void {
+    pub fn deinit(self: *Self) callconv(.c) void {
         switch (self.sides) {
             .All => |sides| {
                 sides.deinit(self.allocator);
