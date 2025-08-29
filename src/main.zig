@@ -195,11 +195,11 @@ pub fn main() !void {
 
     try start(gpa.allocator());
 
-    std.log.info("Total memory requested: {}", .{
+    std.log.info("Total memory requested: {d}", .{
         gpa.total_requested_bytes,
     });
 
-    std.log.info("Chunks vertex average: {}", .{
+    std.log.info("Chunks vertex average: {d}", .{
         chunks.vertexCount / chunks.chunkCount,
     });
 
@@ -1091,7 +1091,7 @@ fn water_update(
     args: *const blocks.BlockUpdateParams,
 ) void {
     _ = self;
-    std.log.info("Updating water at: {}", .{args.pos});
+    std.log.info("Updating water at: {f}", .{args.pos});
     for ([_]i64{ -1, 1 }) |x| {
         for ([_]i64{ -1, 1 }) |z| {
             const neighborpos = args.pos.add(util.IVec3.new(x, 0, z));
@@ -1132,7 +1132,7 @@ fn waterProp(
     }
 
     if (neighborWater >= 2) {
-        std.log.info("Propegating water: {}", .{pos});
+        std.log.info("Propegating water: {f}", .{pos});
         blockSetCallBack(&pos, &chunks.Block{
             .id = waterId,
         });

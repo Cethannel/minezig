@@ -83,7 +83,7 @@ pub fn mspc(T: type) type {
 pub fn assert(condition: bool, message: ?[]const u8) void {
     if (!condition) {
         const src = @src();
-        std.log.err("Failed assert: {s} at {s}:[{}]", .{
+        std.log.err("Failed assert: {s} at {s}:[{d}]", .{
             src.fn_name,
             src.file,
             src.line,
@@ -269,7 +269,7 @@ pub fn MultiArray(comptime T: type, comptime len: usize) type {
         ) *FieldType(field) {
             var arr: [*]const u8 = self.bytes[0..].ptr;
             arr += caclOffset(field, index);
-            return @constCast(@alignCast(@ptrCast(arr)));
+            return @ptrCast(@alignCast(@constCast(arr)));
         }
 
         pub fn getField(
@@ -611,7 +611,7 @@ pub fn testAABBAgainstFrustum(mvp: zlm.Mat4, aabb: *const AABB) bool {
         const min = @field(aabb.min, field.name);
         const max = @field(aabb.max, field.name);
         if (min > max) {
-            std.debug.panic("Field {s} is wrong min ({}) > max ({})", .{
+            std.debug.panic("Field {s} is wrong min ({f}) > max ({f})", .{
                 field.name,
                 min,
                 max,

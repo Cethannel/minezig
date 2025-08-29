@@ -448,7 +448,7 @@ pub const OldChunkMap = struct {
 
     pub noinline fn genMesh(self: *Self, chunkPos: IVec3) !void {
         if (config.chunkGenLog) {
-            std.log.info("Generating chunk at: {}", .{chunkPos});
+            std.log.info("Generating chunk at: {f}", .{chunkPos});
         }
         if (self.map.getPtr(chunkPos)) |rChunk| {
             rChunk.clear_meshes();
@@ -546,8 +546,8 @@ pub const OldChunkMap = struct {
 pub fn set_block(chunkMap: *std.AutoHashMap(IVec3, Chunk), pos: IVec3, block: Block) !void {
     const poss = worldToChunkPos(utils.ivec3ToVec3(pos));
 
-    std.log.info("Setting block in chunk: {}", .{poss.chunkPos});
-    std.log.info("Setting block in chunk pos: {}", .{poss.inChunkPos});
+    std.log.info("Setting block in chunk: {f}", .{poss.chunkPos});
+    std.log.info("Setting block in chunk pos: {f}", .{poss.inChunkPos});
 
     const chunk = chunkMap.getPtr(poss.chunkPos) orelse return error.ChunkNotFound;
 
@@ -795,7 +795,7 @@ fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
     }
 
     if (state.chunksInFlightSet.get(toGenPos) == null) {
-        //std.log.info("Generating chunk in range at: {}", .{toGenPos});
+        //std.log.info("Generating chunk in range at: {f}", .{toGenPos});
         try state.sendWorkerThreadQueue.enqueue(.{
             .GetChunk = toGenPos,
         });
@@ -908,9 +908,9 @@ fn convert_single_coord(input: i64) i64 {
         };
 
         var buf: [128:0]u8 = undefined;
-        var msg = std.fmt.bufPrint(&buf, "expected < 16 got: {}", .{out}) catch unreachable;
+        var msg = std.fmt.bufPrint(&buf, "expected < 16 got: {d}", .{out}) catch unreachable;
         utils.assert(out < 16, msg);
-        msg = std.fmt.bufPrint(&buf, "expected >= 0 got: {}", .{out}) catch unreachable;
+        msg = std.fmt.bufPrint(&buf, "expected >= 0 got: {d}", .{out}) catch unreachable;
         utils.assert(out >= 0, msg);
 
         return out;

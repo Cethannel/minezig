@@ -48,8 +48,8 @@
             .hash = "sokolshdc-0.1.0-r2KZDtYXlQS2C2CNekXgsRqhyKk5JtGzBlFBTMX27o0f",
         },
         .zlm = .{
-            .url = "git+https://github.com/Cethannel/zlm.git#b082d3e7ee94b8ef0c82ce50200184fb0d6da03e",
-            .hash = "zlm-0.1.0-2FyqULmzAADxX4CQm2XS2JyFSqIcPzX7OiWAyDZvSBar",
+            .url = "git+https://github.com/Cethannel/zlm.git#a5a4faa9537510f5d44f973dad9584ca0a3b9ef3",
+            .hash = "zlm-0.1.0-2FyqUCy0AADXZmugVSU8uO-ooJ5j6AnpW6C4PJhUlbZS",
         },
     },
     .paths = .{

@@ -57,9 +57,9 @@ pub fn workerThread() void {
                 .GetChunk => |pos| getChunk(&chunkMap, pos) catch unreachable,
                 .SetPlayerPos => |pos| playerPos = pos,
                 .SetBlock => |sbData| {
-                    std.log.info("Setting block at: {}", .{sbData.pos});
+                    std.log.info("Setting block at: {f}", .{sbData.pos});
                     chunks.set_block(&chunkMap, sbData.pos, sbData.block) catch {
-                        std.log.err("Failed to set block at: {}", .{sbData.pos});
+                        std.log.err("Failed to set block at: {f}", .{sbData.pos});
                     };
                     const cpos = chunks.worldToChunkPos(utils.ivec3ToVec3(sbData.pos));
                     getChunk(&chunkMap, cpos.chunkPos) catch unreachable;
@@ -75,7 +75,7 @@ pub fn workerThread() void {
         }
 
         while (updates.pop()) |update| {
-            std.log.info("Got block update at: {}", .{update});
+            std.log.info("Got block update at: {f}", .{update});
             if (chunks.getBlockPtr(&chunkMap, update)) |block| {
                 if (blocks.getBlockFromId(block.id)) |blk| {
                     blk.block_update(&.{
@@ -86,7 +86,7 @@ pub fn workerThread() void {
                     });
                 } else {
                     std.log.err(
-                        "Failed to get block with id: {}",
+                        "Failed to get block with id: {f}",
                         .{@intFromEnum(block.id)},
                     );
                 }
@@ -116,7 +116,7 @@ fn getChunk(chunkMap: *ChunkMap, pos: IVec3) !void {
 
 fn blockUpdateCallback(pos: *const utils.IVec3) callconv(.c) void {
     blockUpdateQueue.enqueue(pos.*) catch {
-        std.log.err("Failed to trigger block update at: {}", .{pos.*});
+        std.log.err("Failed to trigger block update at: {f}", .{pos.*});
     };
 }
 
@@ -124,13 +124,13 @@ fn setBlockCallback(
     pos: *const utils.IVec3,
     block: *const chunks.Block,
 ) callconv(.c) void {
-    std.log.info("Setting block at: {}", .{pos.*});
+    std.log.info("Setting block at: {f}", .{pos.*});
     state.sendWorkerThreadQueue.enqueue(.{
         .SetBlock = .{
             .block = block.*,
             .pos = pos.*,
         },
     }) catch {
-        std.log.err("Failed to set block at: {}", .{pos.*});
+        std.log.err("Failed to set block at: {f}", .{pos.*});
     };
 }

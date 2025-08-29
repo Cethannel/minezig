@@ -334,7 +334,7 @@ pub fn toBlock(inner: anytype, allocator: std.mem.Allocator, name: []const u8) !
         switch (comptime checkType(genFieldTypeInfo, other_field_name, iType, field)) {
             .Default => {
                 if (!@hasDecl(iType, other_field_name)) {
-                    @compileError(std.fmt.comptimePrint("{} does not have required function `{s}`: {}", .{
+                    @compileError(std.fmt.comptimePrint("{f} does not have required function `{s}`: {f}", .{
                         iType,
                         other_field_name,
                         field.type,
