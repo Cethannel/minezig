@@ -51,6 +51,18 @@
             .url = "git+https://github.com/Cethannel/zlm.git#a5a4faa9537510f5d44f973dad9584ca0a3b9ef3",
             .hash = "zlm-0.1.0-2FyqUCy0AADXZmugVSU8uO-ooJ5j6AnpW6C4PJhUlbZS",
         },
+        .vulkan = .{
+            .url = "git+https://github.com/Snektron/vulkan-zig.git#c9c4dae70356766f0954ae7d2b8aba4d1dd53a2a",
+            .hash = "vulkan-0.0.0-r7Ytx6hBAwBUnt0XA-uOkR2hda4fAHFhQITNTgJpnFkY",
+        },
+        .vulkan_headers = .{
+            .url = "https://github.com/KhronosGroup/Vulkan-Headers/archive/v1.3.283.tar.gz",
+            .hash = "N-V-__8AAAkkoQGn5z1yoNVrwqZfnYmZp8AZ5CJgoHRMQI0c",
+        },
+        .zglfw = .{
+            .url = "git+https://github.com/Cethannel/zglfw.git#ac018200d772834ac5b1671d8830db8de72f440e",
+            .hash = "zglfw-0.1.0-BghZXTLTAAAqPn9O6sbJHqel5adujcpOWTS4LGF9Uy5I",
+        },
     },
     .paths = .{
         "build.zig",

@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const chunkgen = b.option(bool, "chunkGenLog", "Log generating chunks") orelse false;
-    var controllerSupport = !(b.option(
+    var controllerSupport = (b.option(
         bool,
         "dissableController",
         "Disstable controller support",
@@ -50,14 +50,63 @@ pub fn build(b: *std.Build) !void {
 
     const ziglangSet = b.dependency("ziglangSet", std_args);
 
+    const vulkan = b.dependency("vulkan", .{
+        .target = target,
+        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
+        .registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml"),
+    });
+
+    const glfw = b.dependency("zglfw", std_args);
+
     // inject the cimgui header search path into the sokol C library compile step
     dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
+
+    const imports: []const std.Build.Module.Import = &.{
+        .{ .name = "sokol", .module = dep_sokol.module("sokol") },
+        .{ .name = "zignal", .module = zignal_dependency.module("zignal") },
+        .{ .name = "cimgui", .module = dep_cimgui.module("cimgui") },
+        .{ .name = "zlm", .module = zlm.module("zlm") },
+        .{ .name = "zclay", .module = zclay.module("zclay") },
+        .{ .name = "uuid", .module = uuid.module("uuid") },
+        .{ .name = "ziglangSet", .module = ziglangSet.module("ziglangSet") },
+        .{ .name = "vulkan", .module = vulkan.module("vulkan-zig") },
+        .{ .name = "glfw", .module = glfw.module("glfw") },
+    };
+
+    const vert_cmd = b.addSystemCommand(&.{
+        "glslc",
+        "--target-env=vulkan1.2",
+        "-o",
+    });
+    const vert_spv = vert_cmd.addOutputFileArg("vert.spv");
+    vert_cmd.addFileArg(b.path("src/shaders/cube.vert"));
+
+    const frag_cmd = b.addSystemCommand(&.{
+        "glslc",
+        "--target-env=vulkan1.2",
+        "-o",
+    });
+    const frag_spv = frag_cmd.addOutputFileArg("frag.spv");
+    frag_cmd.addFileArg(b.path("src/shaders/cube.frag"));
 
     const exe_mod = b.addModule("minezig", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = imports,
     });
+
+    exe_mod.linkSystemLibrary("glfw", .{ .needed = true, .preferred_link_mode = .static });
+
+    exe_mod.addAnonymousImport(
+        "vertex_shader",
+        .{ .root_source_file = vert_spv },
+    );
+
+    exe_mod.addAnonymousImport(
+        "fragment_shader",
+        .{ .root_source_file = frag_spv },
+    );
 
     const exe = b.addExecutable(.{
         .name = "minezig",
@@ -70,41 +119,6 @@ pub fn build(b: *std.Build) !void {
 
     addControllerSupport(b, target, exe, controllerSupport);
     //addWasmSupport(b, target, exe);
-
-    const imports = [_]Import{
-        .{
-            .name = "sokol",
-            .dep = dep_sokol,
-        },
-        .{
-            .name = "zignal",
-            .dep = zignal_dependency,
-        },
-        .{
-            .name = "cimgui",
-            .dep = dep_cimgui,
-        },
-        .{
-            .name = "zlm",
-            .dep = zlm,
-        },
-        .{
-            .name = "zclay",
-            .dep = zclay,
-        },
-        .{
-            .name = "uuid",
-            .dep = uuid,
-        },
-        .{
-            .name = "ziglangSet",
-            .dep = ziglangSet,
-        },
-    };
-
-    for (imports) |import| {
-        exe.root_module.addImport(import.name, import.dep.module(import.name));
-    }
 
     const options = b.addOptions();
     options.addOption(bool, "chunkGenLog", chunkgen);
@@ -156,10 +170,6 @@ pub fn build(b: *std.Build) !void {
     });
     addControllerSupport(b, target, exe_unit_tests, controllerSupport);
 
-    for (imports) |import| {
-        exe_unit_tests.root_module.addImport(import.name, import.dep.module(import.name));
-    }
-
     exe_unit_tests.root_module.addOptions("config", options);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
@@ -174,7 +184,7 @@ pub fn build(b: *std.Build) !void {
         b,
         target,
         exe.root_module,
-        &imports,
+        imports,
     );
 
     exe.step.dependOn(shaderState);
@@ -191,7 +201,7 @@ fn buildShaders(
     b: *Build,
     target: Build.ResolvedTarget,
     root_module: *Build.Module,
-    imports: []const Import,
+    imports: []const std.Build.Module.Import,
 ) !*Build.Step {
     const shaders_dir = "src/shaders/";
     const shaders = .{
@@ -221,10 +231,8 @@ fn buildShaders(
         const shader_module = b.createModule(.{
             .root_source_file = b.path(out_path),
             .target = target,
+            .imports = imports,
         });
-        for (imports) |import| {
-            shader_module.addImport(import.name, import.dep.module(import.name));
-        }
         root_module.addImport(shader, shader_module);
     }
 

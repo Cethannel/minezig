@@ -7,6 +7,9 @@ const sg = sokol.gfx;
 const sglue = sokol.glue;
 const slog = sokol.log;
 const sdtx = sokol.debugtext;
+const VulkanRender = @import("VulkanRender.zig");
+
+const vk = @import("vulkan");
 
 const clayRender = @import("clay_render.zig");
 
@@ -188,6 +191,43 @@ pub const Vertex = extern struct {
     v: f32,
     normal: zlm.Vec3,
     modifierColor: zlm.Vec3,
+
+    pub fn getBindingDescription() vk.VertexInputBindingDescription {
+        return vk.VertexInputBindingDescription{
+            .binding = 0,
+            .stride = @sizeOf(@This()),
+            .input_rate = .vertex,
+        };
+    }
+
+    pub fn getAttributeDescriptions() [4]vk.VertexInputAttributeDescription {
+        return [4]vk.VertexInputAttributeDescription{
+            vk.VertexInputAttributeDescription{
+                .binding = 0,
+                .location = 0,
+                .format = .r32g32b32_sfloat,
+                .offset = @offsetOf(@This(), "pos"),
+            },
+            vk.VertexInputAttributeDescription{
+                .binding = 0,
+                .location = 1,
+                .format = .r32g32_sfloat,
+                .offset = @offsetOf(@This(), "u"),
+            },
+            vk.VertexInputAttributeDescription{
+                .binding = 0,
+                .location = 2,
+                .format = .r32g32b32_sfloat,
+                .offset = @offsetOf(@This(), "normal"),
+            },
+            vk.VertexInputAttributeDescription{
+                .binding = 0,
+                .location = 3,
+                .format = .r32g32b32_sfloat,
+                .offset = @offsetOf(@This(), "modifierColor"),
+            },
+        };
+    }
 };
 
 pub fn main() !void {
@@ -195,7 +235,10 @@ pub fn main() !void {
         .requested_memory_limit = 8 * 1024 * 1024 * 1024,
     };
 
-    try start(gpa.allocator());
+    var renderer: VulkanRender = .{
+        .allocator = gpa.allocator(),
+    };
+    try renderer.run();
 
     std.log.info("Total memory requested: {d}", .{
         gpa.total_requested_bytes,
