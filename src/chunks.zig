@@ -470,9 +470,11 @@ pub const OldChunkMap = struct {
                     data.vertices.deinit();
                 } else {
                     const vertexBuffer = sg.makeBuffer(.{
+                        .usage = vertexBufferUsage,
                         .data = sg.asRange(data.vertices.items),
                     });
                     const indexBuffer = sg.makeBuffer(.{
+                        .usage = indexBufferUsage,
                         .type = .INDEXBUFFER,
                         .data = sg.asRange(data.indices.items),
                     });
@@ -710,6 +712,16 @@ const emptyBuf: [0]u8 = .{};
 var emptyAllocBuf = std.heap.FixedBufferAllocator.init(&emptyBuf);
 const emptyAlloc = emptyAllocBuf.allocator();
 
+const vertexBufferUsage = sg.BufferUsage{
+    .vertex_buffer = true,
+    .dynamic_update = true,
+};
+
+const indexBufferUsage = sg.BufferUsage{
+    .index_buffer = true,
+    .dynamic_update = true,
+};
+
 pub const Mesh = struct {
     vertices: std.array_list.Managed(root.Vertex) = .init(emptyAlloc),
     indices: std.array_list.Managed(u32) = .init(emptyAlloc),
@@ -733,16 +745,19 @@ pub const Mesh = struct {
             return;
         }
         if (self.buffers) |buffs| {
-            std.log.info("Destroying buffer: {any}", .{buffs.indexBuffer});
-            sg.destroyBuffer(buffs.indexBuffer);
-            std.log.info("Destroying buffer: {any}", .{buffs.vertexBuffer});
+            std.log.info("Updating buffer: {any}", .{buffs.indexBuffer});
+            sg.updateBuffer(buffs.indexBuffer, sg.asRange(self.indices.items));
+            std.log.info("Updating buffer: {any}", .{buffs.vertexBuffer});
             sg.destroyBuffer(buffs.vertexBuffer);
+            sg.updateBuffer(buffs.vertexBuffer, sg.asRange(self.vertices.items));
+            return;
         }
         const vertexBuffer = sg.makeBuffer(.{
+            .usage = vertexBufferUsage,
             .data = sg.asRange(self.vertices.items),
         });
         const indexBuffer = sg.makeBuffer(.{
-            .usage = .{ .index_buffer = true },
+            .usage = indexBufferUsage,
             .data = sg.asRange(self.indices.items),
         });
 

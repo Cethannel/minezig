@@ -292,8 +292,6 @@ fn init() callconv(.c) void {
             .image = sg.makeImage(img_desc),
         },
     });
-    //state.bind.images[shd.IMG_tex] = sg.makeImage(img_desc);
-    logAtlas() catch unreachable;
 
     state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
 
