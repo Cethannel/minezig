@@ -71,7 +71,7 @@ pub const Mesh = struct {
     numIndices: u32,
 };
 
-const State = struct {
+pub const State = struct {
     dx: f32 = 0.0,
     dy: f32 = 0.0,
     dz: f32 = 0.0,
@@ -1044,7 +1044,7 @@ fn calcPos(pitch: f32, yaw: f32, offset: f32) Vec3 {
     };
 }
 
-fn defaultBlocks() !void {
+pub fn defaultBlocks() !void {
     try state.blocksArr.appendSlice(
         &.{
             try (try blocks.Cube.init_all(
@@ -1102,7 +1102,7 @@ fn defaultBlocks() !void {
     );
 }
 
-fn registerBlockUpdates() void {
+pub fn registerBlockUpdates() void {
     registerBlockUpdate("water", @ptrCast(&water_update));
 }
 

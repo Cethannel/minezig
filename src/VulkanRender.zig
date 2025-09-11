@@ -4,13 +4,31 @@ const glfw = @import("glfw");
 const zlm = @import("zlm");
 const zignal = @import("zignal");
 
+const main = @import("main.zig");
+
+const blocks = @import("blocks.zig");
+const textures = @import("textures.zig");
+const util = @import("utils.zig");
+const workerThread = @import("workerThread.zig");
+const chunks = @import("chunks.zig");
+const zset = @import("ziglangSet");
+
+const c = @cImport({
+    @cInclude("GLFW/glfw3.h");
+});
+
+const IZlm = zlm.SpecializeOn(i64);
+pub const IVec3 = IZlm.Vec3;
+
 const builtin = @import("builtin");
 
-const BaseWrapper = vk.BaseWrapper;
-const InstanceWrapper = vk.InstanceWrapper;
-const DeviceWrapper = vk.DeviceWrapper;
+pub const BaseWrapper = vk.BaseWrapper;
+pub const InstanceWrapper = vk.InstanceWrapper;
+pub const DeviceWrapper = vk.DeviceWrapper;
 
-const Device = vk.DeviceProxy;
+pub const Device = vk.DeviceProxy;
+
+const state = &main.state;
 
 allocator: std.mem.Allocator,
 window: ?*glfw.Window = null,
@@ -75,64 +93,10 @@ start_time: std.time.Instant = undefined,
 
 const Self = @This();
 
-const Vertex = extern struct {
-    pos: zlm.Vec3,
-    color: zlm.Vec3,
-    tex_coord: zlm.Vec2,
-
-    pub fn getBindingDescription() vk.VertexInputBindingDescription {
-        return vk.VertexInputBindingDescription{
-            .binding = 0,
-            .stride = @sizeOf(@This()),
-            .input_rate = .vertex,
-        };
-    }
-
-    pub fn getAttributeDescriptions() [3]vk.VertexInputAttributeDescription {
-        return [3]vk.VertexInputAttributeDescription{
-            vk.VertexInputAttributeDescription{
-                .binding = 0,
-                .location = 0,
-                .format = .r32g32b32_sfloat,
-                .offset = @offsetOf(@This(), "pos"),
-            },
-            vk.VertexInputAttributeDescription{
-                .binding = 0,
-                .location = 1,
-                .format = .r32g32b32_sfloat,
-                .offset = @offsetOf(@This(), "color"),
-            },
-            vk.VertexInputAttributeDescription{
-                .binding = 0,
-                .location = 2,
-                .format = .r32g32_sfloat,
-                .offset = @offsetOf(@This(), "tex_coord"),
-            },
-        };
-    }
-};
-
-const vertices = [_]Vertex{
-    .{ .pos = .new(-0.5, -0.5, 0.0), .color = .new(1.0, 0.0, 0.0), .tex_coord = .new(1.0, 0.0) },
-    .{ .pos = .new(0.5, -0.5, 0.0), .color = .new(0.0, 1.0, 0.0), .tex_coord = .new(0.0, 0.0) },
-    .{ .pos = .new(0.5, 0.5, 0.0), .color = .new(0.0, 0.0, 1.0), .tex_coord = .new(0.0, 1.0) },
-    .{ .pos = .new(-0.5, 0.5, 0.0), .color = .new(1.0, 1.0, 1.0), .tex_coord = .new(1.0, 1.0) },
-
-    .{ .pos = .new(-0.5, -0.5, -0.5), .color = .new(1.0, 0.0, 0.0), .tex_coord = .new(1.0, 0.0) },
-    .{ .pos = .new(0.5, -0.5, -0.5), .color = .new(0.0, 1.0, 0.0), .tex_coord = .new(0.0, 0.0) },
-    .{ .pos = .new(0.5, 0.5, -0.5), .color = .new(0.0, 0.0, 1.0), .tex_coord = .new(0.0, 1.0) },
-    .{ .pos = .new(-0.5, 0.5, -0.5), .color = .new(1.0, 1.0, 1.0), .tex_coord = .new(1.0, 1.0) },
-};
-
-const indices = [_]u16{
-    0, 1, 2, 2, 3, 0, //
-    4, 5, 6, 6, 7, 4,
-};
+const Vertex = main.Vertex;
 
 const UniformBufferObject = extern struct {
-    model: zlm.Mat4 align(16),
-    view: zlm.Mat4 align(16),
-    proj: zlm.Mat4 align(16),
+    mvp: zlm.Mat4 align(16),
 };
 
 const WIDTH = 800;
@@ -161,6 +125,7 @@ const enable_validation_layers = switch (builtin.mode) {
 
 pub fn run(self: *Self) !void {
     self.start_time = try std.time.Instant.now();
+    try self.initGame();
     try self.initWindow();
     try self.initVulkan();
     try self.mainLoop();
@@ -168,7 +133,10 @@ pub fn run(self: *Self) !void {
 }
 
 fn initWindow(self: *Self) !void {
+    c.glfwInitHint(c.GLFW_PLATFORM, c.GLFW_PLATFORM_X11);
+
     try glfw.init();
+    glfw.windowHint(glfw.ClientAPI, glfw.NoAPI);
     glfw.windowHint(glfw.ClientAPI, glfw.NoAPI);
 
     self.window = try glfw.createWindow(WIDTH, HEIGHT, "Vulkan", null, null);
@@ -762,12 +730,47 @@ fn createImageViews(self: *Self) !void {
 }
 
 fn createVertexBuffer(self: *Self) !void {
-    const buffer_size: vk.DeviceSize = @sizeOf(Vertex) * vertices.len;
+    const r_chunk = state.solidMeshMap.getPtr(.zero).?;
+
+    try r_chunk.inner.hookupBuffers(
+        self.vki,
+        self.dev,
+        self.physical_device,
+        self.command_pool,
+        self.graphics_queue,
+    );
+
+    try createVertexBufferGeneric(
+        self.vki,
+        self.dev,
+        self.physical_device,
+        self.command_pool,
+        self.graphics_queue,
+        &self.vertex_buffer,
+        &self.vertex_buffer_memory,
+        r_chunk.inner.vertices.items,
+    );
+}
+
+pub fn createVertexBufferGeneric(
+    vki: InstanceWrapper,
+    dev: Device,
+    physical_device: vk.PhysicalDevice,
+    command_pool: vk.CommandPool,
+    queue: vk.Queue,
+    buffer: *vk.Buffer,
+    memory: *vk.DeviceMemory,
+    vertices_in: []const Vertex,
+) !void {
+    const buffer_size: vk.DeviceSize = @sizeOf(Vertex) * vertices_in.len;
 
     var staging_buffer: vk.Buffer = .null_handle;
     var staging_buffer_memory: vk.DeviceMemory = .null_handle;
 
-    try self.createBuffer(
+    try createBufferGeneric(
+        vki,
+        dev,
+        physical_device,
         buffer_size,
         .{ .transfer_src_bit = true },
         .{ .host_visible_bit = true, .host_coherent_bit = true },
@@ -775,26 +778,29 @@ fn createVertexBuffer(self: *Self) !void {
         &staging_buffer_memory,
     );
 
-    const data = try self.dev.mapMemory(staging_buffer_memory, 0, buffer_size, .{});
-    const data_arr: *@TypeOf(vertices) = @ptrCast(@alignCast(data.?));
-    @memcpy(data_arr, vertices[0..]);
-    self.dev.unmapMemory(staging_buffer_memory);
+    const data = try dev.mapMemory(staging_buffer_memory, 0, buffer_size, .{});
+    const data_arr: [*]Vertex = @ptrCast(@alignCast(data.?));
+    @memcpy(data_arr[0..vertices_in.len], vertices_in[0..]);
+    dev.unmapMemory(staging_buffer_memory);
 
-    try self.createBuffer(
+    try createBufferGeneric(
+        vki,
+        dev,
+        physical_device,
         buffer_size,
         .{
             .vertex_buffer_bit = true,
             .transfer_dst_bit = true,
         },
         .{ .device_local_bit = true },
-        &self.vertex_buffer,
-        &self.vertex_buffer_memory,
+        buffer,
+        memory,
     );
 
-    try self.copyBuffer(staging_buffer, self.vertex_buffer, buffer_size);
+    try copyBufferGeneric(dev, command_pool, queue, staging_buffer, buffer.*, buffer_size);
 
-    self.dev.destroyBuffer(staging_buffer, null);
-    self.dev.freeMemory(staging_buffer_memory, null);
+    dev.destroyBuffer(staging_buffer, null);
+    dev.freeMemory(staging_buffer_memory, null);
 }
 
 fn transitionImageLayout(
@@ -915,12 +921,39 @@ fn copyBufferToImage(
 }
 
 fn createIndexBuffer(self: *Self) !void {
-    const buffer_size: vk.DeviceSize = @sizeOf(u16) * indices.len;
+    const r_chunk = state.solidMeshMap.getPtr(.zero).?;
+
+    try createIndexBufferGeneric(
+        self.vki,
+        self.dev,
+        self.physical_device,
+        self.command_pool,
+        self.graphics_queue,
+        r_chunk.inner.indices.items,
+        &self.index_buffer,
+        &self.index_buffer_memory,
+    );
+}
+
+pub fn createIndexBufferGeneric(
+    vki: InstanceWrapper,
+    dev: Device,
+    physical_device: vk.PhysicalDevice,
+    command_pool: vk.CommandPool,
+    queue: vk.Queue,
+    in_indices: []const u32,
+    buffer: *vk.Buffer,
+    memory: *vk.DeviceMemory,
+) !void {
+    const buffer_size: vk.DeviceSize = @sizeOf(u32) * in_indices.len;
 
     var staging_buffer: vk.Buffer = .null_handle;
     var staging_buffer_memory: vk.DeviceMemory = .null_handle;
 
-    try self.createBuffer(
+    try createBufferGeneric(
+        vki,
+        dev,
+        physical_device,
         buffer_size,
         .{ .transfer_src_bit = true },
         .{ .host_visible_bit = true, .host_coherent_bit = true },
@@ -928,26 +961,29 @@ fn createIndexBuffer(self: *Self) !void {
         &staging_buffer_memory,
     );
 
-    const data = try self.dev.mapMemory(staging_buffer_memory, 0, buffer_size, .{});
-    const data_arr: *@TypeOf(indices) = @ptrCast(@alignCast(data.?));
-    @memcpy(data_arr, indices[0..]);
-    self.dev.unmapMemory(staging_buffer_memory);
+    const data = try dev.mapMemory(staging_buffer_memory, 0, buffer_size, .{});
+    const data_arr: [*]u32 = @ptrCast(@alignCast(data.?));
+    @memcpy(data_arr[0..in_indices.len], in_indices[0..]);
+    dev.unmapMemory(staging_buffer_memory);
 
-    try self.createBuffer(
+    try createBufferGeneric(
+        vki,
+        dev,
+        physical_device,
         buffer_size,
         .{
             .index_buffer_bit = true,
             .transfer_dst_bit = true,
         },
         .{ .device_local_bit = true },
-        &self.index_buffer,
-        &self.index_buffer_memory,
+        buffer,
+        memory,
     );
 
-    try self.copyBuffer(staging_buffer, self.index_buffer, buffer_size);
+    try copyBufferGeneric(dev, command_pool, queue, staging_buffer, buffer.*, buffer_size);
 
-    self.dev.destroyBuffer(staging_buffer, null);
-    self.dev.freeMemory(staging_buffer_memory, null);
+    dev.destroyBuffer(staging_buffer, null);
+    dev.freeMemory(staging_buffer_memory, null);
 }
 
 fn createUniformBuffers(self: *Self) !void {
@@ -1058,21 +1094,40 @@ fn copyBuffer(
     dst_buffer: vk.Buffer,
     size: vk.DeviceSize,
 ) !void {
-    const command_buffer = try self.beginSingleTimeCommands();
-
-    const copy_region: vk.BufferCopy = .{
-        .src_offset = 0,
-        .dst_offset = 0,
-        .size = size,
-    };
-
-    self.vkd.cmdCopyBuffer(command_buffer, src_buffer, dst_buffer, 1, @ptrCast(&copy_region));
-
-    try self.endSingleTimeCommands(command_buffer);
+    try copyBufferGeneric(
+        self.dev,
+        self.command_pool,
+        self.graphics_queue,
+        src_buffer,
+        dst_buffer,
+        size,
+    );
 }
 
 fn createBuffer(
     self: *Self,
+    size: vk.DeviceSize,
+    usage: vk.BufferUsageFlags,
+    properties: vk.MemoryPropertyFlags,
+    buffer: *vk.Buffer,
+    buffer_memory: *vk.DeviceMemory,
+) !void {
+    return createBufferGeneric(
+        self.vki,
+        self.dev,
+        self.physical_device,
+        size,
+        usage,
+        properties,
+        buffer,
+        buffer_memory,
+    );
+}
+
+pub fn createBufferGeneric(
+    vki: InstanceWrapper,
+    dev: Device,
+    physical_device: vk.PhysicalDevice,
     size: vk.DeviceSize,
     usage: vk.BufferUsageFlags,
     properties: vk.MemoryPropertyFlags,
@@ -1085,22 +1140,36 @@ fn createBuffer(
         .sharing_mode = .exclusive,
     };
 
-    buffer.* = try self.dev.createBuffer(&buffer_info, null);
+    buffer.* = try dev.createBuffer(&buffer_info, null);
 
-    const mem_requirements = self.dev.getBufferMemoryRequirements(buffer.*);
+    const mem_requirements = dev.getBufferMemoryRequirements(buffer.*);
 
     const alloc_info: vk.MemoryAllocateInfo = .{
         .allocation_size = mem_requirements.size,
-        .memory_type_index = try self.findMemoryType(mem_requirements.memory_type_bits, properties),
+        .memory_type_index = try findMemoryTypeGeneric(
+            vki,
+            physical_device,
+            mem_requirements.memory_type_bits,
+            properties,
+        ),
     };
 
-    buffer_memory.* = try self.dev.allocateMemory(&alloc_info, null);
+    buffer_memory.* = try dev.allocateMemory(&alloc_info, null);
 
-    try self.dev.bindBufferMemory(buffer.*, buffer_memory.*, 0);
+    try dev.bindBufferMemory(buffer.*, buffer_memory.*, 0);
 }
 
 fn findMemoryType(self: *Self, type_filter: u32, properties: vk.MemoryPropertyFlags) !u32 {
-    const mem_properties = self.vki.getPhysicalDeviceMemoryProperties(self.physical_device);
+    return findMemoryTypeGeneric(self.vki, self.physical_device, type_filter, properties);
+}
+
+fn findMemoryTypeGeneric(
+    vki: InstanceWrapper,
+    physical_device: vk.PhysicalDevice,
+    type_filter: u32,
+    properties: vk.MemoryPropertyFlags,
+) !u32 {
+    const mem_properties = vki.getPhysicalDeviceMemoryProperties(physical_device);
 
     for (0..mem_properties.memory_type_count) |i| {
         if (type_filter & (@as(u32, 1) << @intCast(i)) != 0 and //
@@ -1227,7 +1296,7 @@ fn createGraphicsPipeline(self: *Self) !void {
         .polygon_mode = .fill,
         .line_width = 1.0,
         .cull_mode = .{ .back_bit = true },
-        .front_face = .counter_clockwise,
+        .front_face = .clockwise,
     };
 
     const multisampling: vk.PipelineMultisampleStateCreateInfo = .{
@@ -1631,36 +1700,16 @@ fn createImageView(
 }
 
 fn beginSingleTimeCommands(self: *Self) !vk.CommandBuffer {
-    const alloc_info: vk.CommandBufferAllocateInfo = .{
-        .level = .primary,
-        .command_pool = self.command_pool,
-        .command_buffer_count = 1,
-    };
-
-    var command_buffer: vk.CommandBuffer = .null_handle;
-    try self.dev.allocateCommandBuffers(&alloc_info, @ptrCast(&command_buffer));
-
-    const begin_info: vk.CommandBufferBeginInfo = .{
-        .flags = .{ .one_time_submit_bit = true },
-    };
-
-    try self.vkd.beginCommandBuffer(command_buffer, &begin_info);
-
-    return command_buffer;
+    return beginSingleTimeCommandsGeneric(self.dev, self.command_pool);
 }
 
 fn endSingleTimeCommands(self: *Self, command_buffer: vk.CommandBuffer) !void {
-    try self.vkd.endCommandBuffer(command_buffer);
-
-    const submit_info: vk.SubmitInfo = .{
-        .command_buffer_count = 1,
-        .p_command_buffers = @ptrCast(&command_buffer),
-    };
-
-    try self.vkd.queueSubmit(self.graphics_queue, 1, @ptrCast(&submit_info), .null_handle);
-    try self.vkd.queueWaitIdle(self.graphics_queue);
-
-    self.dev.freeCommandBuffers(self.command_pool, 1, @ptrCast(&command_buffer));
+    try endSingleTimeCommandsGeneric(
+        self.dev,
+        self.command_pool,
+        self.graphics_queue,
+        command_buffer,
+    );
 }
 
 fn createImage(
@@ -1767,7 +1816,9 @@ fn recordCommandBuffer(
 
     self.vkd.cmdBindPipeline(command_buffer, .graphics, self.graphics_pipeline);
 
-    const vertex_buffers = [_]vk.Buffer{self.vertex_buffer};
+    const r_chunk = state.solidMeshMap.getPtr(.zero).?;
+
+    const vertex_buffers = [_]vk.Buffer{r_chunk.inner.buffers.?.vertexBuffer};
     const offsets = [_]vk.DeviceSize{0};
 
     self.vkd.cmdBindVertexBuffers(
@@ -1778,7 +1829,12 @@ fn recordCommandBuffer(
         offsets[0..].ptr,
     );
 
-    self.vkd.cmdBindIndexBuffer(command_buffer, self.index_buffer, 0, .uint16);
+    self.vkd.cmdBindIndexBuffer(
+        command_buffer,
+        r_chunk.inner.buffers.?.indexBuffer,
+        0,
+        .uint32,
+    );
 
     const viewport: vk.Viewport = .{
         .x = 0.0,
@@ -1809,7 +1865,7 @@ fn recordCommandBuffer(
         null,
     );
 
-    self.vkd.cmdDrawIndexed(command_buffer, @intCast(indices.len), 1, 0, 0, 0);
+    self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.inner.indices.items.len), 1, 0, 0, 0);
 
     self.vkd.cmdEndRenderPass(command_buffer);
 
@@ -1918,18 +1974,22 @@ fn updateUniformBuffer(self: *Self, current_image: usize) !void {
 
     const time: f32 = @as(f32, @floatFromInt(current_time.since(self.start_time))) / @as(f32, @floatFromInt(std.time.ns_per_s));
 
-    var ubo: UniformBufferObject = .{
-        .model = zlm.Mat4.createAngleAxis(.unitZ, time * zlm.toRadians(90.0)),
-        .view = .createLookAt(.all(2.0), .zero, .unitZ),
-        .proj = .createPerspective(
-            zlm.toRadians(45.0),
-            @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height)),
-            0.1,
-            10.0,
-        ),
-    };
+    const model = zlm.Mat4.createAngleAxis(.unitY, time * zlm.toRadians(90.0));
+    const view = zlm.Mat4.createLookAt(.new(16.0, -5.0, 16.0), .zero, .unitY);
+    var proj = zlm.Mat4.createPerspective(
+        zlm.toRadians(45.0),
+        @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height)),
+        0.1,
+        10000.0,
+    );
 
-    ubo.proj.fields[1][1] *= -1;
+    proj.fields[1][1] *= -1;
+
+    const mvp = model.mul(view).mul(proj);
+
+    const ubo: UniformBufferObject = .{
+        .mvp = mvp,
+    };
 
     const dest: *UniformBufferObject = @ptrCast(@alignCast(self.uniform_buffers_mapped[current_image].?));
     dest.* = ubo;
@@ -1990,6 +2050,11 @@ fn cleanup(self: *Self) void {
 
     self.dev.destroyDescriptorSetLayout(self.descriptor_set_layout, null);
 
+    var mesh_iter = state.solidMeshMap.iterator();
+    while (mesh_iter.next()) |mesh| {
+        mesh.value_ptr.inner.deinit(self.dev);
+    }
+
     self.dev.destroyBuffer(self.index_buffer, null);
     self.dev.freeMemory(self.index_buffer_memory, null);
 
@@ -2026,4 +2091,155 @@ fn cleanup(self: *Self) void {
     glfw.destroyWindow(self.window);
 
     glfw.terminate();
+}
+
+fn initGame(self: *Self) !void {
+    state.allocator = self.allocator;
+    state.textureMap = std.StringHashMap(u32).init(state.allocator);
+
+    state.blocksArr = std.array_list.Managed(blocks.Block).init(state.allocator);
+    state.blocksNameArr = std.array_list.Managed(u8).init(state.allocator);
+
+    state.blocksArr.append(blocks.AirBlock) catch unreachable;
+
+    main.defaultBlocks() catch unreachable;
+
+    for (state.blocksArr.items) |block| {
+        state.blocksNameArr.appendSlice(block.blockName.*) catch unreachable;
+        state.blocksNameArr.append(0) catch unreachable;
+    }
+    state.blocksNameArr.append(0) catch unreachable;
+
+    const blockTextures = textures.registerBlocks(state.blocksArr.items) catch unreachable;
+
+    defer state.allocator.free(blockTextures);
+
+    main.registerBlockUpdates();
+
+    state.atlas = textures.createAtlas(blockTextures, state.allocator) catch unreachable;
+
+    for (blockTextures, 0..) |blkName, i| {
+        const basePath = "assets/textures/";
+        const name = state.allocator.alloc(u8, blkName.len - "assets/textures/".len) catch unreachable;
+        @memcpy(name, blkName[basePath.len..]);
+        std.log.info("Adding texture name: {s}", .{name});
+        state.textureMap.put(name, @intCast(i)) catch unreachable;
+        state.allocator.free(blkName);
+    }
+
+    const State = main.State;
+
+    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 64 * 64) catch unreachable;
+
+    state.sendWorkerThreadQueue = util.mspc(workerThread.toWorkerThreadMessage) //
+        .init(state.allocator, 1024) catch unreachable;
+    state.recvWorkerThreadQueue = util.mspc(workerThread.fromWorkerThreadMessage) //
+        .init(state.allocator, 1024) catch unreachable;
+
+    state.recvChunkMeshQueue = @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64) catch unreachable;
+
+    state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
+
+    state.chunkMap = std.AutoHashMap(IVec3, chunks.Chunk).init(state.allocator);
+    state.chunkMap.ensureTotalCapacity(32 * 32) catch unreachable;
+
+    state.solidMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
+    state.solidMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
+
+    state.transparentMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
+    state.transparentMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
+
+    state.chunksToRegen = zset.ArraySetManaged(IVec3).init(state.allocator);
+
+    state.chunkGenFuncs = std.array_list.Managed(chunks.ChunkGenFunc).init(state.allocator);
+    chunks.add_builtin_gen_funcs() catch unreachable;
+
+    state.pass_action.colors[0] = .{
+        .load_action = .CLEAR,
+        .clear_value = .{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 1 },
+    };
+
+    state.chunkPool.init(.{
+        .allocator = state.allocator,
+    }) catch unreachable;
+
+    try chunks.genChunk(&state.chunkMap, .zero);
+    const rc = try chunks.genMeshSidesGeneric(.zero, .{});
+    const rChunk = rc;
+
+    inline for (.{ "solid", "transparent" }) |field| {
+        const mesh = @field(rChunk, field);
+        try @field(state, field ++ "MeshMap").put(.zero, .{
+            .inner = mesh,
+            .uuid = rChunk.uuid,
+        });
+    }
+
+    state.workerThreadHandle = std.Thread.spawn(
+        .{},
+        workerThread.workerThread,
+        .{},
+    ) catch unreachable;
+}
+
+fn beginSingleTimeCommandsGeneric(
+    dev: Device,
+    command_pool: vk.CommandPool,
+) !vk.CommandBuffer {
+    const alloc_info: vk.CommandBufferAllocateInfo = .{
+        .level = .primary,
+        .command_pool = command_pool,
+        .command_buffer_count = 1,
+    };
+
+    var command_buffer: vk.CommandBuffer = .null_handle;
+    try dev.allocateCommandBuffers(&alloc_info, @ptrCast(&command_buffer));
+
+    const begin_info: vk.CommandBufferBeginInfo = .{
+        .flags = .{ .one_time_submit_bit = true },
+    };
+
+    try dev.beginCommandBuffer(command_buffer, &begin_info);
+
+    return command_buffer;
+}
+
+fn endSingleTimeCommandsGeneric(
+    dev: Device,
+    command_pool: vk.CommandPool,
+    queue: vk.Queue,
+    command_buffer: vk.CommandBuffer,
+) !void {
+    try dev.endCommandBuffer(command_buffer);
+
+    const submit_info: vk.SubmitInfo = .{
+        .command_buffer_count = 1,
+        .p_command_buffers = @ptrCast(&command_buffer),
+    };
+
+    try dev.queueSubmit(queue, 1, @ptrCast(&submit_info), .null_handle);
+    try dev.queueWaitIdle(queue);
+
+    dev.freeCommandBuffers(command_pool, 1, @ptrCast(&command_buffer));
+}
+
+pub fn copyBufferGeneric(
+    dev: Device,
+    command_pool: vk.CommandPool,
+    queue: vk.Queue,
+    src_buffer: vk.Buffer,
+    dst_buffer: vk.Buffer,
+    size: vk.DeviceSize,
+) !void {
+    const command_buffer = try beginSingleTimeCommandsGeneric(dev, command_pool);
+
+    const copy_region: vk.BufferCopy = .{
+        .src_offset = 0,
+        .dst_offset = 0,
+        .size = size,
+    };
+
+    dev.cmdCopyBuffer(command_buffer, src_buffer, dst_buffer, 1, @ptrCast(&copy_region));
+
+    try endSingleTimeCommandsGeneric(dev, command_pool, queue, command_buffer);
 }

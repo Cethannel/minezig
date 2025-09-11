@@ -2,11 +2,15 @@ const std = @import("std");
 const root = @import("main.zig");
 const shd = @import("cube.glsl");
 
+const vk = @import("vulkan");
+
 const config = @import("config");
 
 const uuid = @import("uuid");
 
 const fastnoise = @import("fastnoise.zig");
+
+const VulkanRender = @import("VulkanRender.zig");
 
 const Blocks = @import("blocks.zig");
 
@@ -603,12 +607,6 @@ pub fn chunkData(comptime T: type) type {
         uuid: uuid.Uuid,
 
         const Self = @This();
-
-        pub fn deinit(self: *Self) void {
-            if (@hasDecl(T, "deinit")) {
-                self.inner.deinit();
-            }
-        }
     };
 }
 
@@ -726,45 +724,75 @@ pub const Mesh = struct {
     vertices: std.array_list.Managed(root.Vertex) = .init(emptyAlloc),
     indices: std.array_list.Managed(u32) = .init(emptyAlloc),
     buffers: ?struct {
-        vertexBuffer: sg.Buffer,
-        indexBuffer: sg.Buffer,
+        vertexBuffer: vk.Buffer = .null_handle,
+        vertex_buffer_memory: vk.DeviceMemory = .null_handle,
+        indexBuffer: vk.Buffer = .null_handle,
+        index_buffer_memory: vk.DeviceMemory = .null_handle,
     } = null,
 
-    pub fn deinit(self: *@This()) void {
-        if (self.buffers) |buffs| {
-            sg.destroyBuffer(buffs.vertexBuffer);
-            sg.destroyBuffer(buffs.indexBuffer);
-        }
+    pub fn deinit(
+        self: *@This(),
+        dev: VulkanRender.Device,
+    ) void {
+        self.destroyBuffers(dev);
 
         self.vertices.deinit();
         self.indices.deinit();
     }
 
-    pub fn hookupBuffers(self: *@This()) void {
+    pub fn hookupBuffers(
+        self: *@This(),
+        vki: VulkanRender.InstanceWrapper,
+        dev: VulkanRender.Device,
+        physical_device: vk.PhysicalDevice,
+        command_pool: vk.CommandPool,
+        queue: vk.Queue,
+    ) !void {
         if (self.vertices.items.len == 0 or self.indices.items.len == 0) {
             return;
         }
-        if (self.buffers) |buffs| {
-            std.log.info("Updating buffer: {any}", .{buffs.indexBuffer});
-            sg.updateBuffer(buffs.indexBuffer, sg.asRange(self.indices.items));
-            std.log.info("Updating buffer: {any}", .{buffs.vertexBuffer});
-            sg.destroyBuffer(buffs.vertexBuffer);
-            sg.updateBuffer(buffs.vertexBuffer, sg.asRange(self.vertices.items));
-            return;
-        }
-        const vertexBuffer = sg.makeBuffer(.{
-            .usage = vertexBufferUsage,
-            .data = sg.asRange(self.vertices.items),
-        });
-        const indexBuffer = sg.makeBuffer(.{
-            .usage = indexBufferUsage,
-            .data = sg.asRange(self.indices.items),
-        });
+        self.destroyBuffers(dev);
 
-        self.buffers = .{
-            .vertexBuffer = vertexBuffer,
-            .indexBuffer = indexBuffer,
-        };
+        self.buffers = .{};
+
+        const buffers = &self.buffers.?;
+
+        try VulkanRender.createVertexBufferGeneric(
+            vki,
+            dev,
+            physical_device,
+            command_pool,
+            queue,
+            &buffers.vertexBuffer,
+            &buffers.vertex_buffer_memory,
+            self.vertices.items,
+        );
+
+        try VulkanRender.createIndexBufferGeneric(
+            vki,
+            dev,
+            physical_device,
+            command_pool,
+            queue,
+            self.indices.items,
+            &buffers.indexBuffer,
+            &buffers.index_buffer_memory,
+        );
+    }
+
+    pub fn destroyBuffers(
+        self: *@This(),
+        dev: VulkanRender.Device,
+    ) void {
+        if (self.buffers) |buffs| {
+            dev.destroyBuffer(buffs.vertexBuffer, null);
+            dev.freeMemory(buffs.vertex_buffer_memory, null);
+
+            dev.destroyBuffer(buffs.indexBuffer, null);
+            dev.freeMemory(buffs.index_buffer_memory, null);
+        }
+
+        self.buffers = null;
     }
 
     pub fn swapInplace(self: *@This(), other: @This()) void {
@@ -1197,4 +1225,75 @@ pub fn genMeshSides(
         .pos = pos,
         .rc = rc,
     });
+}
+
+pub fn genMeshSidesGeneric(
+    pos: IVec3,
+    neighbors: NeighborChunks,
+) !@FieldType(state.recvChunkMeshQueue.innerT(), "rc") {
+    var out: Sides = Sides.AllAir;
+    var chunk = state.chunkMap.get(pos) orelse return error.NoChunk;
+
+    inline for ([_][]const u8{ "x", "z" }) |dir| {
+        inline for ([_]i64{ 1, -1 }) |offset| {
+            var offsetVec = IVec3.zero;
+            @field(offsetVec, dir) = offset;
+            var inChunkOffsetVec = zlm.SpecializeOn(usize).Vec3.zero;
+            @field(inChunkOffsetVec, dir) = @abs((offset - 1) / 2) * (chunkWidth - 1);
+            var dirMulti = zlm.SpecializeOn(usize).Vec3.one;
+            @field(dirMulti, dir) = 0;
+
+            const start = if (offset == 1) "" else "neg_";
+
+            if (@field(neighbors, start ++ dir)) |neibor| {
+                var side = &@field(out, dir);
+                if (offset == -1) {
+                    side = &@field(out, "neg_" ++ dir);
+                }
+                for (0..chunkWidth) |i| {
+                    for (0..chunkHeight) |y| {
+                        side[i][y] = neibor.blocks //
+                        [dirMulti.x * i + inChunkOffsetVec.x] //
+                            [dirMulti.y * y + inChunkOffsetVec.y] //
+                            [dirMulti.z * i + inChunkOffsetVec.z];
+                    }
+                }
+            } else {
+                if (offset == 1) {
+                    @field(out, dir) = @field(Sides.AllAir, "neg_" ++ dir);
+                } else if (offset == -1) {
+                    @field(out, "neg_" ++ dir) = @field(Sides.AllAir, dir);
+                }
+            }
+        }
+    }
+
+    const meshData = try chunk.gen_mesh(out, state.allocator);
+
+    var rc: @FieldType(state.recvChunkMeshQueue.innerT(), "rc") = .{
+        .uuid = chunk.uuid,
+        .solid = .{},
+        .transparent = .{},
+    };
+
+    inline for (mesh_variants) |variant| {
+        const data: Chunk.MeshData = @field(meshData, variant);
+        errdefer data.indices.deinit();
+        errdefer data.vertices.deinit();
+
+        if (data.indices.items.len == 0 or data.vertices.items.len == 0) {
+            data.indices.deinit();
+            data.vertices.deinit();
+        } else {
+            const mesh = Mesh{
+                .vertices = data.vertices,
+                .indices = data.indices,
+                .buffers = null,
+            };
+
+            @field(rc, variant) = mesh;
+        }
+    }
+
+    return rc;
 }
