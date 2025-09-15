@@ -58,6 +58,12 @@ pub fn build(b: *std.Build) !void {
 
     const glfw = b.dependency("zglfw", std_args);
 
+    const sdl_dep = b.dependency("sdl", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const sdl_lib = sdl_dep.artifact("SDL3");
+
     // inject the cimgui header search path into the sokol C library compile step
     dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
 
@@ -95,6 +101,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .imports = imports,
     });
+
+    exe_mod.linkLibrary(sdl_lib);
 
     exe_mod.linkSystemLibrary("glfw", .{ .needed = true, .preferred_link_mode = .static });
 

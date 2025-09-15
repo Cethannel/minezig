@@ -63,6 +63,10 @@
             .url = "git+https://github.com/Cethannel/zglfw.git#ac018200d772834ac5b1671d8830db8de72f440e",
             .hash = "zglfw-0.1.0-BghZXTLTAAAqPn9O6sbJHqel5adujcpOWTS4LGF9Uy5I",
         },
+        .sdl = .{
+            .url = "git+https://github.com/castholm/SDL.git#b1913e7c31ad72ecfd3ab04aeac387027754cfaf",
+            .hash = "sdl-0.3.0+3.2.22-7uIn9Pg3fwGG2IyIOPxxOSVe-75nUng9clt7tXGFLzMr",
+        },
     },
     .paths = .{
         "build.zig",

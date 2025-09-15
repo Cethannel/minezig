@@ -81,6 +81,29 @@ vki: InstanceWrapper = undefined,
 vkd: DeviceWrapper = undefined,
 dev: Device = undefined,
 
+dx: f32 = 0.0,
+dy: f32 = 0.0,
+dz: f32 = 0.0,
+
+pitch: f32 = 0.0,
+yaw: f32 = 0.0,
+
+captured_moust: bool = false,
+
+camera_pos: zlm.Vec3 = .new(0.0, 50.0, 3.0),
+prev_camera_pos: zlm.Vec3 = .zero,
+
+camera_front: zlm.Vec3 = .new(0.0, 0.0, -1.0),
+prev_camera_front: zlm.Vec3 = .new(0.0, 0.0, -1.0),
+
+camera_up: zlm.Vec3 = .unitY,
+prev_camera_up: zlm.Vec3 = .unitY,
+
+sensitivity: f32 = 0.1,
+
+mouseX: f32 = 0.0,
+mouseY: f32 = 0.0,
+
 image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
 render_finished_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
 in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence = @splat(.null_handle),
@@ -89,7 +112,8 @@ frame_buffer_resized: bool = false,
 
 current_frame: usize = 0,
 
-start_time: std.time.Instant = undefined,
+last_frame_time: std.time.Instant = undefined,
+time_diff_ns: u64 = 0,
 
 const Self = @This();
 
@@ -124,7 +148,7 @@ const enable_validation_layers = switch (builtin.mode) {
 };
 
 pub fn run(self: *Self) !void {
-    self.start_time = try std.time.Instant.now();
+    self.last_frame_time = try std.time.Instant.now();
     try self.initGame();
     try self.initWindow();
     try self.initVulkan();
@@ -141,7 +165,15 @@ fn initWindow(self: *Self) !void {
 
     self.window = try glfw.createWindow(WIDTH, HEIGHT, "Vulkan", null, null);
     glfw.setWindowUserPointer(self.window, self);
+
+    if (glfw.rawMouseMotionSupported()) {
+        std.log.info("Enabled raw input\n", .{});
+        glfw.setInputMode(self.window, c.GLFW_RAW_MOUSE_MOTION, c.GLFW_TRUE);
+    }
+
     _ = glfw.setFramebufferSizeCallback(self.window, &framebufferResizeCallback);
+
+    _ = glfw.setKeyCallback(self.window, &keyCallback);
 }
 
 fn framebufferResizeCallback(
@@ -1887,7 +1919,11 @@ fn createSyncObjects(self: *Self) !void {
 
 fn mainLoop(self: *Self) !void {
     while (!glfw.windowShouldClose(self.window)) {
+        self.time_diff_ns = (try std.time.Instant.now()).since(self.last_frame_time);
+        self.last_frame_time = try .now();
         glfw.pollEvents();
+
+        try self.playerMovement();
         try self.drawFrame();
     }
     try self.dev.deviceWaitIdle();
@@ -1970,29 +2006,82 @@ fn drawFrame(self: *Self) !void {
 }
 
 fn updateUniformBuffer(self: *Self, current_image: usize) !void {
-    const current_time = try std.time.Instant.now();
-
-    const time: f32 = @as(f32, @floatFromInt(current_time.since(self.start_time))) / @as(f32, @floatFromInt(std.time.ns_per_s));
-
-    const model = zlm.Mat4.createAngleAxis(.unitY, time * zlm.toRadians(90.0));
-    const view = zlm.Mat4.createLookAt(.new(16.0, -5.0, 16.0), .zero, .unitY);
-    var proj = zlm.Mat4.createPerspective(
-        zlm.toRadians(45.0),
-        @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height)),
-        0.1,
-        10000.0,
-    );
-
-    proj.fields[1][1] *= -1;
-
-    const mvp = model.mul(view).mul(proj);
-
     const ubo: UniformBufferObject = .{
-        .mvp = mvp,
+        .mvp = self.computeVsParams(0.0, 0.0, 0.0),
     };
 
     const dest: *UniformBufferObject = @ptrCast(@alignCast(self.uniform_buffers_mapped[current_image].?));
     dest.* = ubo;
+}
+
+// Frustum near and far.
+pub const near = 0.01;
+pub const far = 1000;
+
+pub fn computeVsParams(self: *const Self, rx: f32, ry: f32, rz: f32) zlm.Mat4 {
+    const view = zlm.Mat4.createLookAt(
+        self.camera_pos,
+        self.camera_pos.add(self.camera_front),
+        self.camera_up,
+    );
+
+    const model = zlm.Mat4.createTranslationXYZ(rx, ry, rz);
+    const aspect = @as(f32, @floatFromInt(self.swapchain_extent.width)) //
+        / @as(f32, @floatFromInt(self.swapchain_extent.height));
+    var proj = zlm.Mat4.createPerspective(zlm.toRadians(45.0), aspect, near, far);
+
+    proj.fields[1][1] *= -1.0;
+
+    const mvp = model.mul(view).mul(proj);
+    return mvp;
+}
+
+fn playerMovement(self: *Self) !void {
+    var cx: f64 = 0.0;
+    var cy: f64 = 0.0;
+    glfw.getCursorPos(self.window, &cx, &cy);
+
+    if (self.captured_moust) {
+        const dx = self.mouseX - cx;
+        const dy = self.mouseY - cy;
+        self.mouseX = @floatCast(cx);
+        self.mouseY = @floatCast(cy);
+
+        self.yaw -= @floatCast(dx * self.sensitivity);
+        self.pitch -= @floatCast(dy * self.sensitivity);
+    }
+
+    const dt: f32 = @floatCast(@as(f64, @floatFromInt(self.time_diff_ns * 60)) / std.time.ns_per_s);
+
+    if (self.pitch > 89.0) {
+        self.pitch = 89.0;
+    }
+    if (self.pitch > -89.0) {
+        self.pitch = -89.0;
+    }
+
+    var direction: zlm.Vec3 = undefined;
+    direction.x = @cos(zlm.toRadians(self.yaw)) * @cos(zlm.toRadians(self.pitch));
+    direction.y = @sin(zlm.toRadians(self.pitch));
+    direction.z = @sin(zlm.toRadians(self.yaw)) * @cos(zlm.toRadians(self.pitch));
+    self.camera_front = direction.normalize();
+
+    const nonY = zlm.Vec3.new(1.0, 0.0, 1.0);
+
+    //const lookY = mat4.createAngleAxis(Vec3.unitX, self.mouseY);
+    self.camera_pos = self.camera_pos.add(self.camera_front.scale(self.dz * dt).mul(nonY));
+    self.camera_pos = self.camera_pos.sub(
+        self.camera_front.cross(self.camera_up).normalize().scale(self.dx * dt).mul(nonY),
+    );
+
+    self.camera_pos = self.camera_pos.add(zlm.Vec3.new(0.0, self.dy * dt, 0.0));
+
+    if (!self.camera_pos.eql(self.prev_camera_pos) or !self.camera_front.eql(self.prev_camera_front) or !self.camera_up.eql(self.prev_camera_up)) {
+        //self.selector.calcPos();
+        self.prev_camera_pos = self.camera_pos;
+        self.prev_camera_front = self.camera_front;
+        self.prev_camera_up = self.camera_up;
+    }
 }
 
 fn recreateSwapChain(self: *Self) !void {
@@ -2000,7 +2089,6 @@ fn recreateSwapChain(self: *Self) !void {
     var height: c_int = 0;
 
     glfw.getFramebufferSize(self.window, &width, &height);
-
     while (width == 0 or height == 0) {
         glfw.getFramebufferSize(self.window, &width, &height);
         glfw.waitEvents();
@@ -2242,4 +2330,66 @@ pub fn copyBufferGeneric(
     dev.cmdCopyBuffer(command_buffer, src_buffer, dst_buffer, 1, @ptrCast(&copy_region));
 
     try endSingleTimeCommandsGeneric(dev, command_pool, queue, command_buffer);
+}
+
+fn keyCallback(
+    window: ?*glfw.Window,
+    key: glfw.Key,
+    scancode: c_int,
+    action: c_int,
+    mods: glfw.Modifiers,
+) callconv(.c) void {
+    std.debug.print("Key: {d}\n", .{key});
+    _ = scancode; // autofix
+    _ = mods; // autofix
+
+    var self: *Self = getFromWindow(window);
+
+    const change: f32 = switch (action) {
+        glfw.Press => 1.0,
+        glfw.Release => -1.0,
+        glfw.Repeat => 0.0,
+        else => unreachable,
+    };
+
+    switch (key) {
+        glfw.KeyA => {
+            self.dx += change;
+            std.log.info("DX: {d}", .{self.dx});
+        },
+        glfw.KeyD => {
+            self.dx -= change;
+        },
+        glfw.KeyW => {
+            self.dz += change;
+        },
+        glfw.KeyS => {
+            self.dz -= change;
+        },
+        glfw.KeyEscape => {
+            if (action == glfw.Press) {
+                if (self.captured_moust) {
+                    glfw.setInputMode(self.window, c.GLFW_CURSOR, c.GLFW_CURSOR_NORMAL);
+                    self.captured_moust = false;
+                } else {
+                    glfw.setInputMode(self.window, c.GLFW_CURSOR, c.GLFW_CURSOR_DISABLED);
+                    self.captured_moust = true;
+                }
+            }
+        },
+        glfw.KeyR => {
+            std.log.info("Dx: {d}", .{self.dx});
+            std.log.info("Dy: {d}", .{self.dy});
+            std.log.info("Dz: {d}", .{self.dz});
+            self.dx = 0.0;
+            self.dy = 0.0;
+            self.dz = 0.0;
+        },
+        else => {},
+    }
+}
+
+fn getFromWindow(window: ?*glfw.Window) *Self {
+    const self: *Self = @ptrCast(@alignCast(glfw.getWindowUserPointer(window).?));
+    return self;
 }
