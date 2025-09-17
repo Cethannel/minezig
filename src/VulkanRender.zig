@@ -50,11 +50,13 @@ swapchain_framebuffers: std.ArrayList(vk.Framebuffer) = .empty,
 
 render_pass: vk.RenderPass = .null_handle,
 descriptor_set_layout: vk.DescriptorSetLayout = .null_handle,
+chunk_descriptor_set_layout: vk.DescriptorSetLayout = .null_handle,
 pipeline_layout: vk.PipelineLayout = .null_handle,
 graphics_pipeline: vk.Pipeline = .null_handle,
 
 command_pool: vk.CommandPool = .null_handle,
 descriptor_pool: vk.DescriptorPool = .null_handle,
+chunks_descriptor_pool: vk.DescriptorPool = .null_handle,
 descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = @splat(.null_handle),
 command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.CommandBuffer = @splat(.null_handle),
 
@@ -62,10 +64,6 @@ vertex_buffer: vk.Buffer = .null_handle,
 vertex_buffer_memory: vk.DeviceMemory = .null_handle,
 index_buffer: vk.Buffer = .null_handle,
 index_buffer_memory: vk.DeviceMemory = .null_handle,
-
-uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.Buffer = @splat(.null_handle),
-uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.DeviceMemory = @splat(.null_handle),
-uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = @splat(null),
 
 texture_image: vk.Image = .null_handle,
 texture_image_memory: vk.DeviceMemory = .null_handle,
@@ -119,13 +117,13 @@ const Self = @This();
 
 const Vertex = main.Vertex;
 
-const UniformBufferObject = extern struct {
+pub const UniformBufferObject = extern struct {
     mvp: zlm.Mat4 align(16),
 };
 
 const WIDTH = 800;
 const HEIGHT = 600;
-const MAX_FRAMES_IN_FLIGHT = 2;
+pub const MAX_FRAMES_IN_FLIGHT = 2;
 
 const validation_layers: []const [*:0]const u8 = ([_][*:0]const u8{"VK_LAYER_KHRONOS_validation"})[0..];
 const device_extensions = [_][:0]const u8{vk.extensions.khr_swapchain.name};
@@ -140,12 +138,13 @@ const _device_extension_names_arr = blk: {
 };
 const device_extension_names: []const [*:0]const u8 = _device_extension_names_arr[0..];
 
-const enable_validation_layers = switch (builtin.mode) {
-    .Debug => true,
-    .ReleaseFast => false,
-    .ReleaseSafe => true,
-    .ReleaseSmall => false,
-};
+const enable_validation_layers = true;
+//switch (builtin.mode) {
+//   .Debug => true,
+//   .ReleaseFast => false,
+//   .ReleaseSafe => true,
+//   .ReleaseSmall => false,
+//};
 
 pub fn run(self: *Self) !void {
     self.last_frame_time = try std.time.Instant.now();
@@ -324,6 +323,7 @@ fn debugCallback(
     _ = messageSeverity; // autofix
     _ = message_type; // autofix
     _ = p_user_data; // autofix
+    std.debug.print("Thing\n", .{});
     if (p_callback_data) |data| {
         if (data.p_message) |msg| {
             std.log.warn("Validation layer: {s}", .{msg});
@@ -762,26 +762,29 @@ fn createImageViews(self: *Self) !void {
 }
 
 fn createVertexBuffer(self: *Self) !void {
-    const r_chunk = state.solidMeshMap.getPtr(.zero).?;
+    _ = self;
+    //const r_chunk = state.solidMeshMap.getPtr(.zero).?;
 
-    try r_chunk.inner.hookupBuffers(
-        self.vki,
-        self.dev,
-        self.physical_device,
-        self.command_pool,
-        self.graphics_queue,
-    );
+    //try r_chunk.inner.hookupBuffers(
+    //    self.vki,
+    //    self.dev,
+    //    self.physical_device,
+    //    self.command_pool,
+    //    self.graphics_queue,
+    //    self.chunk_descriptor_set_layout,
+    //    self.descriptor_pool,
+    //);
 
-    try createVertexBufferGeneric(
-        self.vki,
-        self.dev,
-        self.physical_device,
-        self.command_pool,
-        self.graphics_queue,
-        &self.vertex_buffer,
-        &self.vertex_buffer_memory,
-        r_chunk.inner.vertices.items,
-    );
+    //try createVertexBufferGeneric(
+    //    self.vki,
+    //    self.dev,
+    //    self.physical_device,
+    //    self.command_pool,
+    //    self.graphics_queue,
+    //    &self.vertex_buffer,
+    //    &self.vertex_buffer_memory,
+    //    r_chunk.inner.vertices.items,
+    //);
 }
 
 pub fn createVertexBufferGeneric(
@@ -953,18 +956,19 @@ fn copyBufferToImage(
 }
 
 fn createIndexBuffer(self: *Self) !void {
-    const r_chunk = state.solidMeshMap.getPtr(.zero).?;
+    _ = self;
+    //const r_chunk = state.solidMeshMap.getPtr(.zero).?;
 
-    try createIndexBufferGeneric(
-        self.vki,
-        self.dev,
-        self.physical_device,
-        self.command_pool,
-        self.graphics_queue,
-        r_chunk.inner.indices.items,
-        &self.index_buffer,
-        &self.index_buffer_memory,
-    );
+    //try createIndexBufferGeneric(
+    //    self.vki,
+    //    self.dev,
+    //    self.physical_device,
+    //    self.command_pool,
+    //    self.graphics_queue,
+    //    r_chunk.inner.indices.items,
+    //    &self.index_buffer,
+    //    &self.index_buffer_memory,
+    //);
 }
 
 pub fn createIndexBufferGeneric(
@@ -1019,50 +1023,43 @@ pub fn createIndexBufferGeneric(
 }
 
 fn createUniformBuffers(self: *Self) !void {
-    const buffer_size = @sizeOf(UniformBufferObject);
-
-    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        try self.createBuffer(
-            buffer_size,
-            .{
-                .uniform_buffer_bit = true,
-            },
-            .{
-                .host_visible_bit = true,
-                .host_coherent_bit = true,
-            },
-            &self.uniform_buffers[i],
-            &self.uniform_buffers_memory[i],
-        );
-
-        self.uniform_buffers_mapped[i] = try self.dev.mapMemory(
-            self.uniform_buffers_memory[i],
-            0,
-            buffer_size,
-            .{},
-        );
-    }
+    _ = self;
 }
 
 fn createDescriptorPool(self: *Self) !void {
-    const pool_sizes = [2]vk.DescriptorPoolSize{
-        .{
-            .type = .uniform_buffer,
-            .descriptor_count = MAX_FRAMES_IN_FLIGHT,
-        },
-        .{
-            .type = .combined_image_sampler,
-            .descriptor_count = MAX_FRAMES_IN_FLIGHT,
-        },
-    };
+    {
+        const pool_sizes = [_]vk.DescriptorPoolSize{
+            .{
+                .type = .combined_image_sampler,
+                .descriptor_count = MAX_FRAMES_IN_FLIGHT,
+            },
+        };
 
-    const pool_info: vk.DescriptorPoolCreateInfo = .{
-        .pool_size_count = pool_sizes.len,
-        .p_pool_sizes = pool_sizes[0..].ptr,
-        .max_sets = MAX_FRAMES_IN_FLIGHT,
-    };
+        const pool_info: vk.DescriptorPoolCreateInfo = .{
+            .pool_size_count = pool_sizes.len,
+            .p_pool_sizes = pool_sizes[0..].ptr,
+            .max_sets = MAX_FRAMES_IN_FLIGHT,
+        };
 
-    self.descriptor_pool = try self.dev.createDescriptorPool(&pool_info, null);
+        self.descriptor_pool = try self.dev.createDescriptorPool(&pool_info, null);
+    }
+
+    {
+        const pool_sizes = [_]vk.DescriptorPoolSize{
+            .{
+                .type = .uniform_buffer,
+                .descriptor_count = MAX_FRAMES_IN_FLIGHT * 512,
+            },
+        };
+
+        const pool_info: vk.DescriptorPoolCreateInfo = .{
+            .pool_size_count = pool_sizes.len,
+            .p_pool_sizes = pool_sizes[0..].ptr,
+            .max_sets = MAX_FRAMES_IN_FLIGHT * 512,
+        };
+
+        self.chunks_descriptor_pool = try self.dev.createDescriptorPool(&pool_info, null);
+    }
 }
 
 fn createDescriptorSets(self: *Self) !void {
@@ -1076,12 +1073,6 @@ fn createDescriptorSets(self: *Self) !void {
     try self.dev.allocateDescriptorSets(&alloc_info, self.descriptor_sets[0..].ptr);
 
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        const buffer_info: vk.DescriptorBufferInfo = .{
-            .buffer = self.uniform_buffers[i],
-            .offset = 0,
-            .range = @sizeOf(UniformBufferObject),
-        };
-
         const image_info: vk.DescriptorImageInfo = .{
             .image_layout = .shader_read_only_optimal,
             .image_view = self.texture_image_view,
@@ -1092,16 +1083,6 @@ fn createDescriptorSets(self: *Self) !void {
             .{
                 .dst_set = self.descriptor_sets[i],
                 .dst_binding = 0,
-                .dst_array_element = 0,
-                .descriptor_type = .uniform_buffer,
-                .descriptor_count = 1,
-                .p_buffer_info = @ptrCast(&buffer_info),
-                .p_image_info = ([_]vk.DescriptorImageInfo{})[0..].ptr,
-                .p_texel_buffer_view = ([_]vk.BufferView{})[0..].ptr,
-            },
-            .{
-                .dst_set = self.descriptor_sets[i],
-                .dst_binding = 1,
                 .dst_array_element = 0,
                 .descriptor_type = .combined_image_sampler,
                 .descriptor_count = 1,
@@ -1226,24 +1207,40 @@ fn createDescriptorSetLayout(self: *Self) !void {
     };
 
     const sampler_layout_binding: vk.DescriptorSetLayoutBinding = .{
-        .binding = 1,
+        .binding = 0,
         .descriptor_count = 1,
         .descriptor_type = .combined_image_sampler,
         .p_immutable_samplers = null,
         .stage_flags = .{ .fragment_bit = true },
     };
 
-    const bindings = [_]vk.DescriptorSetLayoutBinding{ ubo_layout_binding, sampler_layout_binding };
+    {
+        const bindings = [_]vk.DescriptorSetLayoutBinding{sampler_layout_binding};
 
-    const layout_info: vk.DescriptorSetLayoutCreateInfo = .{
-        .binding_count = @intCast(bindings.len),
-        .p_bindings = bindings[0..].ptr,
-    };
+        const layout_info: vk.DescriptorSetLayoutCreateInfo = .{
+            .binding_count = @intCast(bindings.len),
+            .p_bindings = bindings[0..].ptr,
+        };
 
-    self.descriptor_set_layout = try self.dev.createDescriptorSetLayout(
-        &layout_info,
-        null,
-    );
+        self.descriptor_set_layout = try self.dev.createDescriptorSetLayout(
+            &layout_info,
+            null,
+        );
+    }
+
+    {
+        const bindings = [_]vk.DescriptorSetLayoutBinding{ubo_layout_binding};
+
+        const layout_info: vk.DescriptorSetLayoutCreateInfo = .{
+            .binding_count = @intCast(bindings.len),
+            .p_bindings = bindings[0..].ptr,
+        };
+
+        self.chunk_descriptor_set_layout = try self.dev.createDescriptorSetLayout(
+            &layout_info,
+            null,
+        );
+    }
 }
 
 fn createGraphicsPipeline(self: *Self) !void {
@@ -1363,9 +1360,14 @@ fn createGraphicsPipeline(self: *Self) !void {
         .blend_constants = @splat(0.0),
     };
 
+    const descriptor_set_layouts = [_]vk.DescriptorSetLayout{
+        self.chunk_descriptor_set_layout,
+        self.descriptor_set_layout,
+    };
+
     const pipeline_layout_info: vk.PipelineLayoutCreateInfo = .{
-        .set_layout_count = 1,
-        .p_set_layouts = @ptrCast(&self.descriptor_set_layout),
+        .set_layout_count = descriptor_set_layouts.len,
+        .p_set_layouts = descriptor_set_layouts[0..].ptr,
     };
 
     self.pipeline_layout = try self.dev.createPipelineLayout(
@@ -1848,56 +1850,84 @@ fn recordCommandBuffer(
 
     self.vkd.cmdBindPipeline(command_buffer, .graphics, self.graphics_pipeline);
 
-    const r_chunk = state.solidMeshMap.getPtr(.zero).?;
+    var chunk_iter = state.solidMeshMap.iterator();
+    while (chunk_iter.next()) |entry| {
+        const chunk_pos = chunks.chunkToWorldPos(entry.key_ptr.*);
+        const key = chunk_pos;
+        const r_chunk = entry.value_ptr;
 
-    const vertex_buffers = [_]vk.Buffer{r_chunk.inner.buffers.?.vertexBuffer};
-    const offsets = [_]vk.DeviceSize{0};
+        if (r_chunk.inner.buffers == null) {
+            try r_chunk.inner.hookupBuffers(
+                self.vki,
+                self.dev,
+                self.physical_device,
+                self.command_pool,
+                self.graphics_queue,
+                self.chunk_descriptor_set_layout,
+                self.chunks_descriptor_pool,
+            );
+        }
 
-    self.vkd.cmdBindVertexBuffers(
-        command_buffer,
-        0,
-        1,
-        vertex_buffers[0..].ptr,
-        offsets[0..].ptr,
-    );
+        const ubo: UniformBufferObject = .{
+            .mvp = self.computeVsParams(key.x, key.y, key.z),
+        };
+        r_chunk.inner.updateUniformBuffer(self.current_frame, ubo);
 
-    self.vkd.cmdBindIndexBuffer(
-        command_buffer,
-        r_chunk.inner.buffers.?.indexBuffer,
-        0,
-        .uint32,
-    );
+        const vertex_buffers = [_]vk.Buffer{r_chunk.inner.buffers.?.vertexBuffer};
 
-    const viewport: vk.Viewport = .{
-        .x = 0.0,
-        .y = 0.0,
-        .width = @floatFromInt(self.swapchain_extent.width),
-        .height = @floatFromInt(self.swapchain_extent.height),
-        .min_depth = 0.0,
-        .max_depth = 1.0,
-    };
+        const offsets = [_]vk.DeviceSize{0};
 
-    self.vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast(&viewport));
+        self.vkd.cmdBindVertexBuffers(
+            command_buffer,
+            0,
+            1,
+            vertex_buffers[0..].ptr,
+            offsets[0..].ptr,
+        );
 
-    const scissor: vk.Rect2D = .{
-        .offset = .{ .x = 0, .y = 0 },
-        .extent = self.swapchain_extent,
-    };
+        self.vkd.cmdBindIndexBuffer(
+            command_buffer,
+            r_chunk.inner.buffers.?.indexBuffer,
+            0,
+            .uint32,
+        );
 
-    self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast(&scissor));
+        const viewport: vk.Viewport = .{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain_extent.width),
+            .height = @floatFromInt(self.swapchain_extent.height),
+            .min_depth = 0.0,
+            .max_depth = 1.0,
+        };
 
-    self.vkd.cmdBindDescriptorSets(
-        command_buffer,
-        .graphics,
-        self.pipeline_layout,
-        0,
-        1,
-        self.descriptor_sets[self.current_frame .. self.current_frame + 1].ptr,
-        0,
-        null,
-    );
+        self.vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast(&viewport));
 
-    self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.inner.indices.items.len), 1, 0, 0, 0);
+        const scissor: vk.Rect2D = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+
+        self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast(&scissor));
+
+        const descriptor_sets = [_]vk.DescriptorSet{
+            r_chunk.inner.buffers.?.descriptor_sets[self.current_frame],
+            self.descriptor_sets[self.current_frame],
+        };
+
+        self.vkd.cmdBindDescriptorSets(
+            command_buffer,
+            .graphics,
+            self.pipeline_layout,
+            0,
+            descriptor_sets.len,
+            descriptor_sets[0..].ptr,
+            0,
+            null,
+        );
+
+        self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.inner.indices.items.len), 1, 0, 0, 0);
+    }
 
     self.vkd.cmdEndRenderPass(command_buffer);
 
@@ -1949,7 +1979,11 @@ fn drawFrame(self: *Self) !void {
     const image_index = next_image_result.image_index;
 
     try self.vkd.resetCommandBuffer(self.command_buffers[self.current_frame], .{});
-    try self.recordCommandBuffer(self.command_buffers[self.current_frame], image_index);
+
+    try self.recordCommandBuffer(
+        self.command_buffers[self.current_frame],
+        image_index,
+    );
 
     const wait_semaphores = [_]vk.Semaphore{self.image_available_semaphores[self.current_frame]};
     const wait_stages = [_]vk.PipelineStageFlags{
@@ -1957,8 +1991,6 @@ fn drawFrame(self: *Self) !void {
     };
 
     const singal_sempahores = [_]vk.Semaphore{self.render_finished_semaphores[self.current_frame]};
-
-    try self.updateUniformBuffer(self.current_frame);
 
     const submit_info: vk.SubmitInfo = .{
         .wait_semaphore_count = 1,
@@ -2129,18 +2161,14 @@ fn cleanup(self: *Self) void {
     self.dev.destroyImage(self.texture_image, null);
     self.dev.freeMemory(self.texture_image_memory, null);
 
-    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        self.dev.destroyBuffer(self.uniform_buffers[i], null);
-        self.dev.freeMemory(self.uniform_buffers_memory[i], null);
-    }
-
     self.dev.destroyDescriptorPool(self.descriptor_pool, null);
 
     self.dev.destroyDescriptorSetLayout(self.descriptor_set_layout, null);
+    self.dev.destroyDescriptorSetLayout(self.chunk_descriptor_set_layout, null);
 
     var mesh_iter = state.solidMeshMap.iterator();
     while (mesh_iter.next()) |mesh| {
-        mesh.value_ptr.inner.deinit(self.dev);
+        mesh.value_ptr.inner.deinit(self.dev, self.descriptor_pool) catch unreachable;
     }
 
     self.dev.destroyBuffer(self.index_buffer, null);
@@ -2251,16 +2279,18 @@ fn initGame(self: *Self) !void {
         .allocator = state.allocator,
     }) catch unreachable;
 
-    try chunks.genChunk(&state.chunkMap, .zero);
-    const rc = try chunks.genMeshSidesGeneric(.zero, .{});
-    const rChunk = rc;
+    inline for (.{ IVec3.zero, IVec3.new(1.0, 0.0, 1.0) }) |pos| {
+        try chunks.genChunk(&state.chunkMap, pos);
+        const rc = try chunks.genMeshSidesGeneric(pos, .{});
+        const rChunk = rc;
 
-    inline for (.{ "solid", "transparent" }) |field| {
-        const mesh = @field(rChunk, field);
-        try @field(state, field ++ "MeshMap").put(.zero, .{
-            .inner = mesh,
-            .uuid = rChunk.uuid,
-        });
+        inline for (.{ "solid", "transparent" }) |field| {
+            const mesh = @field(rChunk, field);
+            try @field(state, field ++ "MeshMap").put(pos, .{
+                .inner = mesh,
+                .uuid = rChunk.uuid,
+            });
+        }
     }
 
     state.workerThreadHandle = std.Thread.spawn(
@@ -2365,6 +2395,12 @@ fn keyCallback(
         },
         glfw.KeyS => {
             self.dz -= change;
+        },
+        glfw.KeySpace => {
+            self.dy += change;
+        },
+        glfw.KeyLeftShift => {
+            self.dy -= change;
         },
         glfw.KeyEscape => {
             if (action == glfw.Press) {

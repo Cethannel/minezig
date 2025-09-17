@@ -6,7 +6,7 @@ layout(location = 2) in vec3 modifierColor;
 
 layout(location = 0) out vec4 frag_color;
 
-layout(binding = 1) uniform sampler2D texSampler;
+layout(set = 1, binding = 0) uniform sampler2D texSampler;
 
 void main() {
     vec4 text = texture(texSampler, uv);

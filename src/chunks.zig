@@ -721,6 +721,10 @@ const indexBufferUsage = sg.BufferUsage{
 };
 
 pub const Mesh = struct {
+    const MAX_FRAMES_IN_FLIGHT = VulkanRender.MAX_FRAMES_IN_FLIGHT;
+
+    const Self = @This();
+
     vertices: std.array_list.Managed(root.Vertex) = .init(emptyAlloc),
     indices: std.array_list.Managed(u32) = .init(emptyAlloc),
     buffers: ?struct {
@@ -728,13 +732,20 @@ pub const Mesh = struct {
         vertex_buffer_memory: vk.DeviceMemory = .null_handle,
         indexBuffer: vk.Buffer = .null_handle,
         index_buffer_memory: vk.DeviceMemory = .null_handle,
+
+        descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = @splat(.null_handle),
+
+        uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.Buffer = @splat(.null_handle),
+        uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.DeviceMemory = @splat(.null_handle),
+        uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = @splat(null),
     } = null,
 
     pub fn deinit(
         self: *@This(),
         dev: VulkanRender.Device,
-    ) void {
-        self.destroyBuffers(dev);
+        descriptor_pool: vk.DescriptorPool,
+    ) !void {
+        try self.destroyBuffers(dev, descriptor_pool);
 
         self.vertices.deinit();
         self.indices.deinit();
@@ -747,11 +758,13 @@ pub const Mesh = struct {
         physical_device: vk.PhysicalDevice,
         command_pool: vk.CommandPool,
         queue: vk.Queue,
+        descriptor_set_layout: vk.DescriptorSetLayout,
+        descriptor_pool: vk.DescriptorPool,
     ) !void {
         if (self.vertices.items.len == 0 or self.indices.items.len == 0) {
             return;
         }
-        self.destroyBuffers(dev);
+        try self.destroyBuffers(dev, descriptor_pool);
 
         self.buffers = .{};
 
@@ -778,13 +791,93 @@ pub const Mesh = struct {
             &buffers.indexBuffer,
             &buffers.index_buffer_memory,
         );
+
+        const buffer_size = @sizeOf(VulkanRender.UniformBufferObject);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            try VulkanRender.createBufferGeneric(
+                vki,
+                dev,
+                physical_device,
+                buffer_size,
+                .{
+                    .uniform_buffer_bit = true,
+                },
+                .{
+                    .host_visible_bit = true,
+                    .host_coherent_bit = true,
+                },
+                &buffers.uniform_buffers[i],
+                &buffers.uniform_buffers_memory[i],
+            );
+
+            buffers.uniform_buffers_mapped[i] = try dev.mapMemory(
+                buffers.uniform_buffers_memory[i],
+                0,
+                buffer_size,
+                .{},
+            );
+        }
+
+        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSetLayout = @splat(descriptor_set_layout);
+        const alloc_info: vk.DescriptorSetAllocateInfo = .{
+            .descriptor_pool = descriptor_pool,
+            .descriptor_set_count = MAX_FRAMES_IN_FLIGHT,
+            .p_set_layouts = layouts[0..].ptr,
+        };
+
+        try dev.allocateDescriptorSets(&alloc_info, buffers.descriptor_sets[0..].ptr);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const buffer_info: vk.DescriptorBufferInfo = .{
+                .buffer = buffers.uniform_buffers[i],
+                .offset = 0,
+                .range = @sizeOf(VulkanRender.UniformBufferObject),
+            };
+
+            const descriptor_writes = [_]vk.WriteDescriptorSet{
+                .{
+                    .dst_set = buffers.descriptor_sets[i],
+                    .dst_binding = 0,
+                    .dst_array_element = 0,
+                    .descriptor_type = .uniform_buffer,
+                    .descriptor_count = 1,
+                    .p_buffer_info = @ptrCast(&buffer_info),
+                    .p_image_info = ([_]vk.DescriptorImageInfo{})[0..].ptr,
+                    .p_texel_buffer_view = ([_]vk.BufferView{})[0..].ptr,
+                },
+            };
+
+            dev.updateDescriptorSets(
+                @intCast(descriptor_writes.len),
+                descriptor_writes[0..].ptr,
+                0,
+                null,
+            );
+        }
+    }
+
+    pub fn updateUniformBuffer(
+        self: *Self,
+        current_image: usize,
+        ubo: VulkanRender.UniformBufferObject,
+    ) void {
+        if (self.buffers) |*buffers| {
+            const dest: *VulkanRender.UniformBufferObject = @ptrCast(
+                @alignCast(buffers.uniform_buffers_mapped[current_image].?),
+            );
+            dest.* = ubo;
+        }
     }
 
     pub fn destroyBuffers(
         self: *@This(),
         dev: VulkanRender.Device,
-    ) void {
+        descriptor_pool: vk.DescriptorPool,
+    ) !void {
         if (self.buffers) |buffs| {
+            try dev.freeDescriptorSets(descriptor_pool, MAX_FRAMES_IN_FLIGHT, buffs.descriptor_sets[0..].ptr);
+
             dev.destroyBuffer(buffs.vertexBuffer, null);
             dev.freeMemory(buffs.vertex_buffer_memory, null);
 
