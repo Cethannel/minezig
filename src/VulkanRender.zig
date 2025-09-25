@@ -909,7 +909,7 @@ fn transitionImageLayout(
         source_stage = .{ .top_of_pipe_bit = true };
         destination_stage = .{ .early_fragment_tests_bit = true };
     } else {
-        unreachable;
+        std.debug.panic("Failed to transition image layout", .{});
     }
 
     self.vkd.cmdPipelineBarrier(
@@ -1595,7 +1595,7 @@ fn findSupportedFormat(
         }
     }
 
-    unreachable;
+    std.debug.panic("Failed to find supported format", .{});
 }
 
 fn hasStencilComponent(format: vk.Format) bool {
@@ -2268,68 +2268,68 @@ fn initGame(self: *Self) !void {
     state.blocksArr = std.array_list.Managed(blocks.Block).init(state.allocator);
     state.blocksNameArr = std.array_list.Managed(u8).init(state.allocator);
 
-    state.blocksArr.append(blocks.AirBlock) catch unreachable;
+    try state.blocksArr.append(blocks.AirBlock);
 
-    main.defaultBlocks() catch unreachable;
+    try main.defaultBlocks();
 
     for (state.blocksArr.items) |block| {
-        state.blocksNameArr.appendSlice(block.blockName.*) catch unreachable;
-        state.blocksNameArr.append(0) catch unreachable;
+        try state.blocksNameArr.appendSlice(block.blockName.*);
+        try state.blocksNameArr.append(0);
     }
-    state.blocksNameArr.append(0) catch unreachable;
+    try state.blocksNameArr.append(0);
 
-    const blockTextures = textures.registerBlocks(state.blocksArr.items) catch unreachable;
+    const blockTextures = try textures.registerBlocks(state.blocksArr.items);
 
     defer state.texturesArena.allocator().free(blockTextures);
 
     main.registerBlockUpdates();
 
-    state.atlas = textures.createAtlas(blockTextures, state.texturesArena.allocator()) catch unreachable;
+    state.atlas = try textures.createAtlas(blockTextures, state.texturesArena.allocator());
 
     for (blockTextures, 0..) |blkName, i| {
         const basePath = "assets/textures/";
-        const name = state.texturesArena.allocator().alloc(u8, blkName.len - "assets/textures/".len) catch unreachable;
+        const name = try state.texturesArena.allocator().alloc(u8, blkName.len - "assets/textures/".len);
         @memcpy(name, blkName[basePath.len..]);
         std.log.info("Adding texture name: {s}", .{name});
-        state.textureMap.put(name, @intCast(i)) catch unreachable;
+        try state.textureMap.put(name, @intCast(i));
         state.texturesArena.allocator().free(blkName);
     }
 
     const State = main.State;
 
-    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 64 * 64) catch unreachable;
+    state.genChunkMeshQueue = try State.genChunkQueueT.init(state.allocator, 64 * 64);
 
-    state.sendWorkerThreadQueue = util.mspc(workerThread.toWorkerThreadMessage) //
-        .init(state.allocator, 1024) catch unreachable;
-    state.recvWorkerThreadQueue = util.mspc(workerThread.fromWorkerThreadMessage) //
-        .init(state.allocator, 1024) catch unreachable;
+    state.sendWorkerThreadQueue = try util.mspc(workerThread.toWorkerThreadMessage) //
+        .init(state.allocator, 1024);
+    state.recvWorkerThreadQueue = try util.mspc(workerThread.fromWorkerThreadMessage) //
+        .init(state.allocator, 1024);
 
-    state.recvChunkMeshQueue = @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64) catch unreachable;
+    state.recvChunkMeshQueue = try @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64);
 
     state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
 
     state.chunkMap = std.AutoHashMap(IVec3, chunks.Chunk).init(state.allocator);
-    state.chunkMap.ensureTotalCapacity(32 * 32) catch unreachable;
+    try state.chunkMap.ensureTotalCapacity(32 * 32);
 
     state.solidMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
-    state.solidMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
+    try state.solidMeshMap.ensureTotalCapacity(32 * 32);
 
     state.transparentMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
-    state.transparentMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
+    try state.transparentMeshMap.ensureTotalCapacity(32 * 32);
 
     state.chunksToRegen = zset.ArraySetManaged(IVec3).init(state.allocator);
 
     state.chunkGenFuncs = std.array_list.Managed(chunks.ChunkGenFunc).init(state.allocator);
-    chunks.add_builtin_gen_funcs() catch unreachable;
+    try chunks.add_builtin_gen_funcs();
 
     state.pass_action.colors[0] = .{
         .load_action = .CLEAR,
         .clear_value = .{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 1 },
     };
 
-    state.chunkPool.init(.{
+    try state.chunkPool.init(.{
         .allocator = state.allocator,
-    }) catch unreachable;
+    });
 
     inline for (.{ IVec3.zero, IVec3.new(1.0, 0.0, 1.0) }) |pos| {
         try chunks.genChunk(&state.chunkMap, pos);
@@ -2345,11 +2345,11 @@ fn initGame(self: *Self) !void {
         }
     }
 
-    state.workerThreadHandle = std.Thread.spawn(
+    state.workerThreadHandle = try std.Thread.spawn(
         .{},
         workerThread.workerThread,
         .{},
-    ) catch unreachable;
+    );
 }
 
 fn beginSingleTimeCommandsGeneric(
@@ -2430,7 +2430,10 @@ fn keyCallback(
         glfw.Press => 1.0,
         glfw.Release => -1.0,
         glfw.Repeat => 0.0,
-        else => unreachable,
+        else => blk: {
+            std.log.err("Unkown action: {d}", .{action});
+            break :blk 0.0;
+        },
     };
 
     switch (key) {
