@@ -87,7 +87,7 @@ pub const State = struct {
     controllerMouseX: f32 = 0.0,
     controllerMouseY: f32 = 0.0,
     text_pass_action: sg.PassAction = .{},
-    atlas: []u32 = undefined,
+    atlas: []u8 = undefined,
 
     chunkMap: std.AutoHashMap(IVec3, chunks.Chunk) = undefined,
     solidMeshMap: chunks.chunkDataMap(chunks.Mesh) = undefined,
@@ -149,6 +149,7 @@ pub const State = struct {
 
     renderDistance: u8 = 16,
 
+    texturesArena: std.heap.ArenaAllocator = undefined,
     textureMap: std.StringHashMap(u32) = undefined,
 
     seed: i32 = 1337,
@@ -162,6 +163,7 @@ pub const State = struct {
 
     const GPA = std.heap.GeneralPurposeAllocator(.{
         .enable_memory_limit = true,
+        .stack_trace_frames = 32,
     });
 
     const genChunkContext = struct {

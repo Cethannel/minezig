@@ -727,7 +727,9 @@ pub const Mesh = struct {
 
     vertices: std.array_list.Managed(root.Vertex) = .init(emptyAlloc),
     indices: std.array_list.Managed(u32) = .init(emptyAlloc),
-    buffers: ?struct {
+    buffers: ?Buffers = null,
+
+    pub const Buffers = struct {
         vertexBuffer: vk.Buffer = .null_handle,
         vertex_buffer_memory: vk.DeviceMemory = .null_handle,
         indexBuffer: vk.Buffer = .null_handle,
@@ -738,7 +740,7 @@ pub const Mesh = struct {
         uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.Buffer = @splat(.null_handle),
         uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.DeviceMemory = @splat(.null_handle),
         uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = @splat(null),
-    } = null,
+    };
 
     pub fn deinit(
         self: *@This(),
@@ -766,9 +768,8 @@ pub const Mesh = struct {
         }
         try self.destroyBuffers(dev, descriptor_pool);
 
-        self.buffers = .{};
-
-        const buffers = &self.buffers.?;
+        var buffers: Buffers = .{};
+        defer self.buffers = buffers;
 
         try VulkanRender.createVertexBufferGeneric(
             vki,
@@ -877,6 +878,12 @@ pub const Mesh = struct {
     ) !void {
         if (self.buffers) |buffs| {
             try dev.freeDescriptorSets(descriptor_pool, MAX_FRAMES_IN_FLIGHT, buffs.descriptor_sets[0..].ptr);
+
+            for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+                dev.unmapMemory(buffs.uniform_buffers_memory[i]);
+                dev.destroyBuffer(buffs.uniform_buffers[i], null);
+                dev.freeMemory(buffs.uniform_buffers_memory[i], null);
+            }
 
             dev.destroyBuffer(buffs.vertexBuffer, null);
             dev.freeMemory(buffs.vertex_buffer_memory, null);

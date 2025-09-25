@@ -51,12 +51,12 @@ pub fn build(b: *std.Build) !void {
     const ziglangSet = b.dependency("ziglangSet", std_args);
 
     const vulkan = b.dependency("vulkan", .{
-        .target = target,
-        .optimize = std.builtin.OptimizeMode.ReleaseSafe,
         .registry = b.dependency("vulkan_headers", .{}).path("registry/vk.xml"),
     });
 
-    const glfw = b.dependency("zglfw", std_args);
+    const zglfw = b.dependency("zglfw", std_args);
+
+    const glfw = b.dependency("glfw_zig", std_args);
 
     const sdl_dep = b.dependency("sdl", .{
         .target = target,
@@ -76,7 +76,7 @@ pub fn build(b: *std.Build) !void {
         .{ .name = "uuid", .module = uuid.module("uuid") },
         .{ .name = "ziglangSet", .module = ziglangSet.module("ziglangSet") },
         .{ .name = "vulkan", .module = vulkan.module("vulkan-zig") },
-        .{ .name = "glfw", .module = glfw.module("glfw") },
+        .{ .name = "glfw", .module = zglfw.module("glfw") },
     };
 
     const vert_cmd = b.addSystemCommand(&.{
@@ -104,7 +104,7 @@ pub fn build(b: *std.Build) !void {
 
     exe_mod.linkLibrary(sdl_lib);
 
-    exe_mod.linkSystemLibrary("glfw", .{ .needed = true, .preferred_link_mode = .static });
+    exe_mod.linkLibrary(glfw.artifact("glfw"));
 
     exe_mod.addAnonymousImport(
         "vertex_shader",
@@ -203,6 +203,13 @@ pub fn build(b: *std.Build) !void {
 
     const mangohud_step = b.step("mangohud", "Run exe with mangohud");
     mangohud_step.dependOn(&mangohud.step);
+
+    const lldb = b.addSystemCommand(&.{"lldb"});
+    lldb.addFileArg(exe.getEmittedBin());
+    lldb.step.dependOn(&exe.step);
+
+    const lldb_step = b.step("lldb", "Run exe with lldb");
+    lldb_step.dependOn(&lldb.step);
 }
 
 fn buildShaders(

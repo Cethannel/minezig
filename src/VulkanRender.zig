@@ -102,8 +102,8 @@ sensitivity: f32 = 0.1,
 mouseX: f32 = 0.0,
 mouseY: f32 = 0.0,
 
-image_available_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
-render_finished_semaphores: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
+image_ready_for_write: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
+image_ready_for_present: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
 in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence = @splat(.null_handle),
 
 frame_buffer_resized: bool = false,
@@ -138,13 +138,12 @@ const _device_extension_names_arr = blk: {
 };
 const device_extension_names: []const [*:0]const u8 = _device_extension_names_arr[0..];
 
-const enable_validation_layers = true;
-//switch (builtin.mode) {
-//   .Debug => true,
-//   .ReleaseFast => false,
-//   .ReleaseSafe => true,
-//   .ReleaseSmall => false,
-//};
+const enable_validation_layers = switch (builtin.mode) {
+    .Debug => true,
+    .ReleaseFast => false,
+    .ReleaseSafe => true,
+    .ReleaseSmall => false,
+};
 
 pub fn run(self: *Self) !void {
     self.last_frame_time = try std.time.Instant.now();
@@ -266,6 +265,7 @@ fn checkValidationLayerSupport(self: *Self) !bool {
     _ = try self.vkb.enumerateInstanceLayerProperties(&layer_count, null);
 
     const available_layers = try self.allocator.alloc(vk.LayerProperties, layer_count);
+    defer self.allocator.free(available_layers);
     _ = try self.vkb.enumerateInstanceLayerProperties(&layer_count, available_layers.ptr);
 
     for (validation_layers) |layer_name| {
@@ -320,13 +320,22 @@ fn debugCallback(
     p_callback_data: ?*const vk.DebugUtilsMessengerCallbackDataEXT,
     p_user_data: ?*anyopaque,
 ) callconv(.c) vk.Bool32 {
-    _ = messageSeverity; // autofix
     _ = message_type; // autofix
     _ = p_user_data; // autofix
-    std.debug.print("Thing\n", .{});
     if (p_callback_data) |data| {
         if (data.p_message) |msg| {
-            std.log.warn("Validation layer: {s}", .{msg});
+            if (messageSeverity.info_bit_ext) {
+                std.log.info("Validation layer: {s}", .{msg});
+            } else if (messageSeverity.warning_bit_ext) {
+                std.log.warn("Validation layer: {s}", .{msg});
+            } else if (messageSeverity.error_bit_ext) {
+                std.log.err("Validation layer: {s}", .{msg});
+            } else if (messageSeverity.verbose_bit_ext) {
+                std.log.debug("Validation layer: {s}", .{msg});
+            } else {
+                std.log.err("Failed to get severity: {any}", .{messageSeverity});
+                std.log.err("Validation layer: {s}", .{msg});
+            }
         } else {
             std.log.warn("Validation layer: NO MESSAGE", .{});
         }
@@ -531,6 +540,7 @@ fn createLogicalDevice(self: *Self) !void {
     const queue_indices = try self.findQueueFamilies(self.physical_device);
 
     var queue_create_infos = std.AutoArrayHashMap(u32, vk.DeviceQueueCreateInfo).init(self.allocator);
+    defer queue_create_infos.deinit();
 
     const queue_priority: f32 = 1.0;
     inline for (std.meta.fields(QueueFamilies)) |field| {
@@ -1039,6 +1049,7 @@ fn createDescriptorPool(self: *Self) !void {
             .pool_size_count = pool_sizes.len,
             .p_pool_sizes = pool_sizes[0..].ptr,
             .max_sets = MAX_FRAMES_IN_FLIGHT,
+            .flags = .{ .free_descriptor_set_bit = true },
         };
 
         self.descriptor_pool = try self.dev.createDescriptorPool(&pool_info, null);
@@ -1056,6 +1067,7 @@ fn createDescriptorPool(self: *Self) !void {
             .pool_size_count = pool_sizes.len,
             .p_pool_sizes = pool_sizes[0..].ptr,
             .max_sets = MAX_FRAMES_IN_FLIGHT * 512,
+            .flags = .{ .free_descriptor_set_bit = true },
         };
 
         self.chunks_descriptor_pool = try self.dev.createDescriptorPool(&pool_info, null);
@@ -1616,13 +1628,10 @@ fn atLeast(input: anytype, at_least: @TypeOf(input)) bool {
 }
 
 fn createTextureImage(self: *Self) !void {
-    var image = try zignal.jpeg.load(zignal.Rgba, self.allocator, "textures/texture.jpg");
-    defer image.deinit(self.allocator);
+    const image_size = state.atlas.len;
 
-    const tex_width = image.cols;
-    const tex_height = image.rows;
-
-    const image_size = tex_width * tex_height * 4;
+    const tex_width = 32;
+    const tex_height = image_size / 32;
 
     var staging_buffer: vk.Buffer = .null_handle;
     var staging_buffer_memory: vk.DeviceMemory = .null_handle;
@@ -1635,7 +1644,7 @@ fn createTextureImage(self: *Self) !void {
         &staging_buffer_memory,
     );
 
-    try self.copyData(u8, image.asBytes(), staging_buffer_memory, image_size);
+    try self.copyData(u8, state.atlas, staging_buffer_memory, image_size);
 
     try self.createImage(
         @intCast(tex_width),
@@ -1802,7 +1811,7 @@ fn copyData(
         return error.WrongLen;
     }
     const mapped_memory = try self.dev.mapMemory(memory, 0, size, .{});
-    const mapped_memory_buffer: [*]T = @ptrCast(mapped_memory);
+    const mapped_memory_buffer: [*]T = @ptrCast(@alignCast(mapped_memory));
     @memcpy(mapped_memory_buffer[0..size], data);
     self.dev.unmapMemory(memory);
 }
@@ -1857,15 +1866,7 @@ fn recordCommandBuffer(
         const r_chunk = entry.value_ptr;
 
         if (r_chunk.inner.buffers == null) {
-            try r_chunk.inner.hookupBuffers(
-                self.vki,
-                self.dev,
-                self.physical_device,
-                self.command_pool,
-                self.graphics_queue,
-                self.chunk_descriptor_set_layout,
-                self.chunks_descriptor_pool,
-            );
+            continue;
         }
 
         const ubo: UniformBufferObject = .{
@@ -1941,13 +1942,34 @@ fn createSyncObjects(self: *Self) !void {
     };
 
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        self.image_available_semaphores[i] = try self.dev.createSemaphore(&semaphore_info, null);
-        self.render_finished_semaphores[i] = try self.dev.createSemaphore(&semaphore_info, null);
+        self.image_ready_for_present[i] = try self.dev.createSemaphore(&semaphore_info, null);
+        self.image_ready_for_write[i] = try self.dev.createSemaphore(&semaphore_info, null);
         self.in_flight_fences[i] = try self.dev.createFence(&fence_info, null);
     }
 }
 
+fn genMesh(self: *Self, chunk_pos: IVec3) !void {
+    const key = chunk_pos;
+    const r_chunk = state.solidMeshMap.getPtr(key).?;
+
+    try r_chunk.inner.hookupBuffers(
+        self.vki,
+        self.dev,
+        self.physical_device,
+        self.command_pool,
+        self.graphics_queue,
+        self.chunk_descriptor_set_layout,
+        self.chunks_descriptor_pool,
+    );
+}
+
 fn mainLoop(self: *Self) !void {
+    var chunk_iter = state.solidMeshMap.keyIterator();
+    while (chunk_iter.next()) |pos| {
+        const thread = try std.Thread.spawn(.{}, genMesh, .{ self, pos.* });
+        thread.detach();
+    }
+
     while (!glfw.windowShouldClose(self.window)) {
         self.time_diff_ns = (try std.time.Instant.now()).since(self.last_frame_time);
         self.last_frame_time = try .now();
@@ -1965,7 +1987,7 @@ fn drawFrame(self: *Self) !void {
     const next_image_result = (try self.dev.acquireNextImageKHR(
         self.swapchain,
         std.math.maxInt(u64),
-        self.image_available_semaphores[self.current_frame],
+        self.image_ready_for_write[self.current_frame],
         self.in_flight_fences[self.current_frame],
     ));
 
@@ -1985,21 +2007,25 @@ fn drawFrame(self: *Self) !void {
         image_index,
     );
 
-    const wait_semaphores = [_]vk.Semaphore{self.image_available_semaphores[self.current_frame]};
+    const wait_semaphores = [_]vk.Semaphore{
+        self.image_ready_for_write[self.current_frame],
+    };
     const wait_stages = [_]vk.PipelineStageFlags{
-        .{ .color_attachment_output_bit = true },
+        .{
+            .color_attachment_output_bit = true,
+        },
     };
 
-    const singal_sempahores = [_]vk.Semaphore{self.render_finished_semaphores[self.current_frame]};
+    const singal_semaphores = [_]vk.Semaphore{self.image_ready_for_present[self.current_frame]};
 
     const submit_info: vk.SubmitInfo = .{
-        .wait_semaphore_count = 1,
+        .wait_semaphore_count = wait_semaphores.len,
         .p_wait_semaphores = wait_semaphores[0..].ptr,
         .p_wait_dst_stage_mask = wait_stages[0..].ptr,
         .command_buffer_count = 1,
         .p_command_buffers = self.command_buffers[self.current_frame..].ptr,
-        .signal_semaphore_count = 1,
-        .p_signal_semaphores = singal_sempahores[0..].ptr,
+        .signal_semaphore_count = singal_semaphores.len,
+        .p_signal_semaphores = singal_semaphores[0..].ptr,
     };
 
     try self.vkd.queueSubmit(
@@ -2012,8 +2038,8 @@ fn drawFrame(self: *Self) !void {
     const swapchains = [_]vk.SwapchainKHR{self.swapchain};
 
     const present_info: vk.PresentInfoKHR = .{
-        .wait_semaphore_count = 1,
-        .p_wait_semaphores = singal_sempahores[0..].ptr,
+        .wait_semaphore_count = singal_semaphores.len,
+        .p_wait_semaphores = singal_semaphores[0..].ptr,
         .swapchain_count = 1,
         .p_swapchains = swapchains[0..].ptr,
         .p_image_indices = @ptrCast(&image_index),
@@ -2153,7 +2179,36 @@ fn cleanupSwapChain(self: *Self) void {
 }
 
 fn cleanup(self: *Self) void {
+    state.close.store(true, .release);
+    state.workerThreadHandle.join();
+
     self.cleanupSwapChain();
+
+    var mesh_iter = state.solidMeshMap.iterator();
+    while (mesh_iter.next()) |mesh| {
+        mesh.value_ptr.inner.deinit(self.dev, self.chunks_descriptor_pool) catch unreachable;
+    }
+    mesh_iter = state.transparentMeshMap.iterator();
+    while (mesh_iter.next()) |mesh| {
+        mesh.value_ptr.inner.deinit(self.dev, self.chunks_descriptor_pool) catch unreachable;
+    }
+
+    state.solidMeshMap.deinit();
+    state.transparentMeshMap.deinit();
+    state.chunkMap.deinit();
+    state.recvChunkMeshQueue.deinit();
+    state.genChunkMeshQueue.deinit();
+    state.recvWorkerThreadQueue.deinit();
+    state.sendWorkerThreadQueue.deinit();
+    for (state.blocksArr.items) |*block| {
+        block.deinit();
+    }
+    state.blocksArr.deinit();
+    state.chunkGenFuncs.deinit();
+    state.blocksNameArr.deinit();
+    state.texturesArena.deinit();
+
+    state.chunkPool.deinit();
 
     self.dev.destroySampler(self.texture_image_sampler, null);
     self.dev.destroyImageView(self.texture_image_view, null);
@@ -2162,14 +2217,10 @@ fn cleanup(self: *Self) void {
     self.dev.freeMemory(self.texture_image_memory, null);
 
     self.dev.destroyDescriptorPool(self.descriptor_pool, null);
+    self.dev.destroyDescriptorPool(self.chunks_descriptor_pool, null);
 
     self.dev.destroyDescriptorSetLayout(self.descriptor_set_layout, null);
     self.dev.destroyDescriptorSetLayout(self.chunk_descriptor_set_layout, null);
-
-    var mesh_iter = state.solidMeshMap.iterator();
-    while (mesh_iter.next()) |mesh| {
-        mesh.value_ptr.inner.deinit(self.dev, self.descriptor_pool) catch unreachable;
-    }
 
     self.dev.destroyBuffer(self.index_buffer, null);
     self.dev.freeMemory(self.index_buffer_memory, null);
@@ -2183,17 +2234,17 @@ fn cleanup(self: *Self) void {
     self.dev.destroyRenderPass(self.render_pass, null);
 
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        self.dev.destroySemaphore(self.image_available_semaphores[i], null);
-        self.dev.destroySemaphore(self.render_finished_semaphores[i], null);
+        self.dev.destroySemaphore(self.image_ready_for_present[i], null);
+        self.dev.destroySemaphore(self.image_ready_for_write[i], null);
         self.dev.destroyFence(self.in_flight_fences[i], null);
     }
 
     self.dev.destroyCommandPool(self.command_pool, null);
 
-    defer self.swapchain_framebuffers.deinit(self.allocator);
+    self.swapchain_framebuffers.deinit(self.allocator);
 
-    defer self.swapchain_image_views.deinit(self.allocator);
-    defer self.swapchain_images.deinit(self.allocator);
+    self.swapchain_image_views.deinit(self.allocator);
+    self.swapchain_images.deinit(self.allocator);
 
     self.vkd.destroyDevice(self.device, null);
 
@@ -2211,7 +2262,8 @@ fn cleanup(self: *Self) void {
 
 fn initGame(self: *Self) !void {
     state.allocator = self.allocator;
-    state.textureMap = std.StringHashMap(u32).init(state.allocator);
+    state.texturesArena = .init(self.allocator);
+    state.textureMap = std.StringHashMap(u32).init(state.texturesArena.allocator());
 
     state.blocksArr = std.array_list.Managed(blocks.Block).init(state.allocator);
     state.blocksNameArr = std.array_list.Managed(u8).init(state.allocator);
@@ -2228,19 +2280,19 @@ fn initGame(self: *Self) !void {
 
     const blockTextures = textures.registerBlocks(state.blocksArr.items) catch unreachable;
 
-    defer state.allocator.free(blockTextures);
+    defer state.texturesArena.allocator().free(blockTextures);
 
     main.registerBlockUpdates();
 
-    state.atlas = textures.createAtlas(blockTextures, state.allocator) catch unreachable;
+    state.atlas = textures.createAtlas(blockTextures, state.texturesArena.allocator()) catch unreachable;
 
     for (blockTextures, 0..) |blkName, i| {
         const basePath = "assets/textures/";
-        const name = state.allocator.alloc(u8, blkName.len - "assets/textures/".len) catch unreachable;
+        const name = state.texturesArena.allocator().alloc(u8, blkName.len - "assets/textures/".len) catch unreachable;
         @memcpy(name, blkName[basePath.len..]);
         std.log.info("Adding texture name: {s}", .{name});
         state.textureMap.put(name, @intCast(i)) catch unreachable;
-        state.allocator.free(blkName);
+        state.texturesArena.allocator().free(blkName);
     }
 
     const State = main.State;
@@ -2369,7 +2421,6 @@ fn keyCallback(
     action: c_int,
     mods: glfw.Modifiers,
 ) callconv(.c) void {
-    std.debug.print("Key: {d}\n", .{key});
     _ = scancode; // autofix
     _ = mods; // autofix
 

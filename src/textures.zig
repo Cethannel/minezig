@@ -20,7 +20,7 @@ const Color = packed struct {
     a: u8,
 };
 
-pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) ![]u32 {
+pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) ![]u8 {
     var out = try zignal.Image(zignal.Rgba).init(allocator, 32 * textures.len, 32);
     errdefer out.deinit(allocator);
 
@@ -40,36 +40,37 @@ pub fn createAtlas(textures: []const []const u8, allocator: std.mem.Allocator) !
         top += 32;
     }
 
-    return @as([*]u32, @ptrCast(out.data.ptr))[0..out.data.len];
+    return out.asBytes();
 }
 
 const basePath = "assets/textures/";
 
 pub fn registerBlocks(blocksToRegister: []blocks.Block) ![]const []const u8 {
+    const alloc = state.texturesArena.allocator();
     var out = std.ArrayList([]const u8).empty;
-    defer out.deinit(state.allocator);
+    defer out.deinit(alloc);
 
     for (blocksToRegister, 0..) |block, i| {
         std.log.info("Block[{}]: `{s}`", .{ i, block.blockName.* });
         if (i == 0) {
             continue;
         }
-        const names = try block.get_textures_names(state.allocator);
-        defer state.allocator.free(names);
+        const names = try block.get_textures_names(alloc);
+        defer alloc.free(names);
 
         for (names) |name| {
-            defer state.allocator.free(name);
+            defer alloc.free(name);
             if (!hasTextureName(out, name)) {
                 std.log.info("Adding texture: {s}", .{name});
-                const newName = try state.allocator.alloc(u8, basePath.len + name.len);
+                const newName = try alloc.alloc(u8, basePath.len + name.len);
                 @memcpy(newName[0..basePath.len], basePath);
                 @memcpy(newName[basePath.len..], name);
-                try out.append(state.allocator, newName);
+                try out.append(alloc, newName);
             }
         }
     }
 
-    return out.toOwnedSlice(state.allocator);
+    return out.toOwnedSlice(alloc);
 }
 
 fn hasTextureName(arr: std.ArrayList([]const u8), name: []const u8) bool {
