@@ -751,6 +751,7 @@ fn createSwapChain(self: *Self) !void {
 
     self.swapchain = try self.dev.createSwapchainKHR(&create_info, null);
 
+    self.swapchain_images.deinit(self.allocator);
     self.swapchain_images = .fromOwnedSlice(try self.dev.getSwapchainImagesAllocKHR(self.swapchain, self.allocator));
     errdefer self.swapchain_images.deinit(self.allocator);
 
@@ -1355,7 +1356,7 @@ fn createGraphicsPipeline(self: *Self) !void {
             .b_bit = true,
             .a_bit = true,
         },
-        .blend_enable = .false,
+        .blend_enable = .true,
         .src_color_blend_factor = .src_alpha,
         .dst_color_blend_factor = .one_minus_src_alpha,
         .color_blend_op = .add,
@@ -1930,6 +1931,77 @@ fn recordCommandBuffer(
         self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.inner.indices.items.len), 1, 0, 0, 0);
     }
 
+    var trans_chunk_iter = state.transparentMeshMap.iterator();
+    while (trans_chunk_iter.next()) |entry| {
+        const chunk_pos = chunks.chunkToWorldPos(entry.key_ptr.*);
+        const key = chunk_pos;
+        const r_chunk = entry.value_ptr;
+
+        if (r_chunk.inner.buffers == null) {
+            continue;
+        }
+
+        const ubo: UniformBufferObject = .{
+            .mvp = self.computeVsParams(key.x, key.y, key.z),
+        };
+        r_chunk.inner.updateUniformBuffer(self.current_frame, ubo);
+
+        const vertex_buffers = [_]vk.Buffer{r_chunk.inner.buffers.?.vertexBuffer};
+
+        const offsets = [_]vk.DeviceSize{0};
+
+        self.vkd.cmdBindVertexBuffers(
+            command_buffer,
+            0,
+            1,
+            vertex_buffers[0..].ptr,
+            offsets[0..].ptr,
+        );
+
+        self.vkd.cmdBindIndexBuffer(
+            command_buffer,
+            r_chunk.inner.buffers.?.indexBuffer,
+            0,
+            .uint32,
+        );
+
+        const viewport: vk.Viewport = .{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @floatFromInt(self.swapchain_extent.width),
+            .height = @floatFromInt(self.swapchain_extent.height),
+            .min_depth = 0.0,
+            .max_depth = 1.0,
+        };
+
+        self.vkd.cmdSetViewport(command_buffer, 0, 1, @ptrCast(&viewport));
+
+        const scissor: vk.Rect2D = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        };
+
+        self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast(&scissor));
+
+        const descriptor_sets = [_]vk.DescriptorSet{
+            r_chunk.inner.buffers.?.descriptor_sets[self.current_frame],
+            self.descriptor_sets[self.current_frame],
+        };
+
+        self.vkd.cmdBindDescriptorSets(
+            command_buffer,
+            .graphics,
+            self.pipeline_layout,
+            0,
+            descriptor_sets.len,
+            descriptor_sets[0..].ptr,
+            0,
+            null,
+        );
+
+        self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.inner.indices.items.len), 1, 0, 0, 0);
+    }
+
     self.vkd.cmdEndRenderPass(command_buffer);
 
     try self.vkd.endCommandBuffer(command_buffer);
@@ -1953,6 +2025,18 @@ fn genMesh(self: *Self, chunk_pos: IVec3) !void {
     const r_chunk = state.solidMeshMap.getPtr(key).?;
 
     try r_chunk.inner.hookupBuffers(
+        self.vki,
+        self.dev,
+        self.physical_device,
+        self.command_pool,
+        self.graphics_queue,
+        self.chunk_descriptor_set_layout,
+        self.chunks_descriptor_pool,
+    );
+
+    const t_r_chunk = state.transparentMeshMap.getPtr(key).?;
+
+    try t_r_chunk.inner.hookupBuffers(
         self.vki,
         self.dev,
         self.physical_device,
