@@ -720,6 +720,112 @@ const indexBufferUsage = sg.BufferUsage{
     .dynamic_update = true,
 };
 
+pub const MeshBuffersPool = struct {
+    store: std.MultiArrayList(Buffer) = .empty,
+    free_nodes: ?*FreeNode = null,
+
+    pub const Index = enum(u16) {
+        null_index = 0,
+        _,
+
+        pub fn fromInt(input: u16) @This() {
+            return @enumFromInt(input + 1);
+        }
+
+        pub fn toInt(self: @This()) ?u16 {
+            if (self == .null_index) {
+                return null;
+            } else {
+                return @intFromEnum(self) - 1;
+            }
+        }
+    };
+
+    const Buffer = Mesh.Buffers;
+
+    const FreeNode = struct {
+        idx: u16,
+        next: ?*@This(),
+    };
+
+    const Self = @This();
+
+    pub fn init(gpa: std.mem.Allocator) !Self {
+        var store = std.MultiArrayList(Mesh.Buffers).empty;
+        try store.resize(gpa, 256); // 256 = 16*16 chunks
+
+        return Self{
+            .store = store,
+        };
+    }
+
+    pub fn newBuffer(
+        self: *Self,
+        gpa: std.mem.Allocator,
+    ) !Index {
+        if (self.free_nodes) |node| {
+            const idx = Index.fromInt(node.idx);
+
+            self.free_nodes = node.next;
+            gpa.destroy(node);
+
+            return idx;
+        }
+
+        const new_idx = try self.store.addOne(gpa);
+        return @enumFromInt(new_idx);
+    }
+
+    pub fn swapOrAddBuffer(
+        self: *Self,
+        gpa: std.mem.Allocator,
+        buffer: Buffer,
+        idx_ptr: *Index,
+    ) !void {
+        if (idx_ptr.* == .null_index) {
+            idx_ptr.* = try self.newBuffer(gpa);
+        }
+
+        self.store.set(@intFromEnum(idx_ptr.*) - 1, buffer);
+    }
+
+    pub fn addBuffer(self: *Self, gpa: std.mem.Allocator, buffer: Buffer) !Index {
+        const idx = try self.newBuffer(gpa);
+
+        self.store.set(@intFromEnum(idx) - 1, buffer);
+
+        return idx;
+    }
+
+    pub fn getBuffer(self: *const Self, idx: Index) ?Buffer {
+        const pos = Index.toInt(idx) orelse return null;
+
+        return self.store.get(pos);
+    }
+
+    pub fn deleteBuffer(
+        self: *Self,
+        gpa: std.mem.Allocator,
+        idx: *Index,
+    ) !void {
+        defer idx.* = .null_index;
+        const new_node = try gpa.create(FreeNode);
+        new_node.next = self.free_nodes;
+
+        self.free_nodes = new_node;
+    }
+
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        while (self.free_nodes) |node| {
+            self.free_nodes = node.next;
+
+            allocator.destroy(node);
+        }
+
+        self.store.deinit(allocator);
+    }
+};
+
 pub const Mesh = struct {
     const MAX_FRAMES_IN_FLIGHT = VulkanRender.MAX_FRAMES_IN_FLIGHT;
 
@@ -727,7 +833,7 @@ pub const Mesh = struct {
 
     vertices: std.array_list.Managed(root.Vertex) = .init(emptyAlloc),
     indices: std.array_list.Managed(u32) = .init(emptyAlloc),
-    buffers: ?Buffers = null,
+    buffers: MeshBuffersPool.Index = .null_index,
 
     pub const Buffers = struct {
         vertexBuffer: vk.Buffer = .null_handle,
@@ -746,8 +852,10 @@ pub const Mesh = struct {
         self: *@This(),
         dev: VulkanRender.Device,
         descriptor_pool: vk.DescriptorPool,
+        buffers_pool: *MeshBuffersPool,
+        gpa: std.mem.Allocator,
     ) !void {
-        try self.destroyBuffers(dev, descriptor_pool);
+        try self.destroyBuffers(dev, descriptor_pool, buffers_pool, gpa);
 
         self.vertices.deinit();
         self.indices.deinit();
@@ -762,14 +870,15 @@ pub const Mesh = struct {
         queue: vk.Queue,
         descriptor_set_layout: vk.DescriptorSetLayout,
         descriptor_pool: vk.DescriptorPool,
+        buffers_pool: *MeshBuffersPool,
+        gpa: std.mem.Allocator,
     ) !void {
         if (self.vertices.items.len == 0 or self.indices.items.len == 0) {
             return;
         }
-        try self.destroyBuffers(dev, descriptor_pool);
+        try self.unmapBuffers(dev, descriptor_pool, buffers_pool);
 
         var buffers: Buffers = .{};
-        defer self.buffers = buffers;
 
         try VulkanRender.createVertexBufferGeneric(
             vki,
@@ -856,27 +965,33 @@ pub const Mesh = struct {
                 null,
             );
         }
+
+        try buffers_pool.swapOrAddBuffer(gpa, buffers, &self.buffers);
     }
 
     pub fn updateUniformBuffer(
         self: *Self,
         current_image: usize,
         ubo: VulkanRender.UniformBufferObject,
+        buffers_array: *MeshBuffersPool,
     ) void {
-        if (self.buffers) |*buffers| {
-            const dest: *VulkanRender.UniformBufferObject = @ptrCast(
-                @alignCast(buffers.uniform_buffers_mapped[current_image].?),
-            );
-            dest.* = ubo;
+        if (self.buffers == .null_index) {
+            return;
         }
+
+        const dest: *VulkanRender.UniformBufferObject = @ptrCast(@alignCast(
+            buffers_array.store.items(.uniform_buffers_mapped)[self.buffers.toInt().?][current_image],
+        ));
+        dest.* = ubo;
     }
 
-    pub fn destroyBuffers(
+    pub fn unmapBuffers(
         self: *@This(),
         dev: VulkanRender.Device,
         descriptor_pool: vk.DescriptorPool,
+        buffers_array: *const MeshBuffersPool,
     ) !void {
-        if (self.buffers) |buffs| {
+        if (buffers_array.getBuffer(self.buffers)) |buffs| {
             try dev.freeDescriptorSets(descriptor_pool, MAX_FRAMES_IN_FLIGHT, buffs.descriptor_sets[0..].ptr);
 
             for (0..MAX_FRAMES_IN_FLIGHT) |i| {
@@ -891,8 +1006,18 @@ pub const Mesh = struct {
             dev.destroyBuffer(buffs.indexBuffer, null);
             dev.freeMemory(buffs.index_buffer_memory, null);
         }
+    }
 
-        self.buffers = null;
+    pub fn destroyBuffers(
+        self: *@This(),
+        dev: VulkanRender.Device,
+        descriptor_pool: vk.DescriptorPool,
+        buffers_array: *MeshBuffersPool,
+        gpa: std.mem.Allocator,
+    ) !void {
+        try self.unmapBuffers(dev, descriptor_pool, buffers_array);
+
+        try buffers_array.deleteBuffer(gpa, &self.buffers);
     }
 
     pub fn swapInplace(self: *@This(), other: @This()) void {
@@ -1388,7 +1513,7 @@ pub fn genMeshSidesGeneric(
             const mesh = Mesh{
                 .vertices = data.vertices,
                 .indices = data.indices,
-                .buffers = null,
+                .buffers = .null_index,
             };
 
             @field(rc, variant) = mesh;
