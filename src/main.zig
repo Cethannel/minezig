@@ -90,8 +90,6 @@ pub const State = struct {
     atlas: []u8 = undefined,
 
     chunkMap: std.AutoHashMap(IVec3, chunks.Chunk) = undefined,
-    solidMeshMap: chunks.chunkDataMap(chunks.Mesh) = undefined,
-    transparentMeshMap: chunks.chunkDataMap(chunks.Mesh) = undefined,
     chunksToRegen: zset.ArraySetManaged(IVec3) = undefined,
 
     chunkGenFuncs: std.array_list.Managed(chunks.ChunkGenFunc) = undefined,
@@ -239,15 +237,13 @@ pub fn main() !void {
 
     var renderer: VulkanRender = .{
         .allocator = gpa.allocator(),
+        .solid_meshes = .init(gpa.allocator()),
+        .transparent_meshes = .init(gpa.allocator()),
     };
     try renderer.run();
 
     std.log.info("Total memory requested: {d}", .{
         gpa.total_requested_bytes,
-    });
-
-    std.log.info("Chunks vertex average: {d}", .{
-        chunks.vertexCount / chunks.chunkCount,
     });
 
     if (gpa.deinit() == .leak) {

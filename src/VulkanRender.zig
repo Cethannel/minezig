@@ -106,14 +106,15 @@ image_ready_for_write: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle)
 image_ready_for_present: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
 in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence = @splat(.null_handle),
 
-mesh_buffers_array: chunks.MeshBuffersPool = .{},
-
 frame_buffer_resized: bool = false,
 
 current_frame: usize = 0,
 
 last_frame_time: std.time.Instant = undefined,
 time_diff_ns: u64 = 0,
+
+solid_meshes: std.AutoHashMap(IVec3, chunks.Buffers),
+transparent_meshes: std.AutoHashMap(IVec3, chunks.Buffers),
 
 const Self = @This();
 
@@ -140,7 +141,8 @@ const _device_extension_names_arr = blk: {
 };
 const device_extension_names: []const [*:0]const u8 = _device_extension_names_arr[0..];
 
-const enable_validation_layers = switch (builtin.mode) {
+const enable_validation_layers = false;
+const _dsad = switch (builtin.mode) {
     .Debug => true,
     .ReleaseFast => false,
     .ReleaseSafe => true,
@@ -1865,25 +1867,17 @@ fn recordCommandBuffer(
 
     self.vkd.cmdBindPipeline(command_buffer, .graphics, self.graphics_pipeline);
 
-    var chunk_iter = state.solidMeshMap.iterator();
-    const vertex_buffers_items = self.mesh_buffers_array.store.items(.vertexBuffer);
-    const index_buffers_items = self.mesh_buffers_array.store.items(.indexBuffer);
-    const descriptor_sets_buffers_items = self.mesh_buffers_array.store.items(.descriptor_sets);
+    var chunk_iter = self.solid_meshes.iterator();
     while (chunk_iter.next()) |entry| {
         const chunk_pos = chunks.chunkToWorldPos(entry.key_ptr.*);
         const key = chunk_pos;
         const r_chunk = entry.value_ptr;
 
-        if (r_chunk.inner.buffers == .null_index) {
-            continue;
-        }
-
         const ubo: UniformBufferObject = .{
             .mvp = self.computeVsParams(key.x, key.y, key.z),
         };
-        const buffers_index = r_chunk.inner.buffers.toInt().?;
-        r_chunk.inner.updateUniformBuffer(self.current_frame, ubo, &self.mesh_buffers_array);
-        const vertex_buffers = vertex_buffers_items[buffers_index..];
+        r_chunk.updateUniformBuffer(self.current_frame, ubo);
+        const vertex_buffers = [_]vk.Buffer{r_chunk.vertexBuffer};
 
         const offsets = [_]vk.DeviceSize{0};
 
@@ -1897,7 +1891,7 @@ fn recordCommandBuffer(
 
         self.vkd.cmdBindIndexBuffer(
             command_buffer,
-            index_buffers_items[buffers_index],
+            r_chunk.indexBuffer,
             0,
             .uint32,
         );
@@ -1921,7 +1915,7 @@ fn recordCommandBuffer(
         self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast(&scissor));
 
         const descriptor_sets = [_]vk.DescriptorSet{
-            descriptor_sets_buffers_items[buffers_index][self.current_frame],
+            r_chunk.descriptor_sets[self.current_frame],
             self.descriptor_sets[self.current_frame],
         };
 
@@ -1936,27 +1930,21 @@ fn recordCommandBuffer(
             null,
         );
 
-        self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.inner.indices.items.len), 1, 0, 0, 0);
+        self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.index_count), 1, 0, 0, 0);
     }
 
-    var trans_chunk_iter = state.transparentMeshMap.iterator();
+    var trans_chunk_iter = self.transparent_meshes.iterator();
     while (trans_chunk_iter.next()) |entry| {
         const chunk_pos = chunks.chunkToWorldPos(entry.key_ptr.*);
         const key = chunk_pos;
         const r_chunk = entry.value_ptr;
 
-        if (r_chunk.inner.buffers == .null_index) {
-            continue;
-        }
-
-        const idx = r_chunk.inner.buffers.toInt().?;
-
         const ubo: UniformBufferObject = .{
             .mvp = self.computeVsParams(key.x, key.y, key.z),
         };
-        r_chunk.inner.updateUniformBuffer(self.current_frame, ubo, &self.mesh_buffers_array);
+        r_chunk.updateUniformBuffer(self.current_frame, ubo);
 
-        const vertex_buffers = [_]vk.Buffer{vertex_buffers_items[idx]};
+        const vertex_buffers = [_]vk.Buffer{r_chunk.vertexBuffer};
 
         const offsets = [_]vk.DeviceSize{0};
 
@@ -1970,7 +1958,7 @@ fn recordCommandBuffer(
 
         self.vkd.cmdBindIndexBuffer(
             command_buffer,
-            index_buffers_items[idx],
+            r_chunk.indexBuffer,
             0,
             .uint32,
         );
@@ -1994,7 +1982,7 @@ fn recordCommandBuffer(
         self.vkd.cmdSetScissor(command_buffer, 0, 1, @ptrCast(&scissor));
 
         const descriptor_sets = [_]vk.DescriptorSet{
-            descriptor_sets_buffers_items[idx][self.current_frame],
+            r_chunk.descriptor_sets[self.current_frame],
             self.descriptor_sets[self.current_frame],
         };
 
@@ -2009,7 +1997,7 @@ fn recordCommandBuffer(
             null,
         );
 
-        self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.inner.indices.items.len), 1, 0, 0, 0);
+        self.vkd.cmdDrawIndexed(command_buffer, @intCast(r_chunk.index_count), 1, 0, 0, 0);
     }
 
     self.vkd.cmdEndRenderPass(command_buffer);
@@ -2031,10 +2019,27 @@ fn createSyncObjects(self: *Self) !void {
 }
 
 fn genMesh(self: *Self, chunk_pos: IVec3) !void {
-    const key = chunk_pos;
-    const r_chunk = state.solidMeshMap.getPtr(key).?;
+    std.debug.print("Generating mesh at: {f}\n", .{chunk_pos});
+    const sides = try chunks.genMeshSidesGeneric(.{});
+    const chunk = state.chunkMap.getPtr(chunk_pos).?;
+    var solid_buffer = chunks.Chunk.ChunkBuffer{
+        .indexBuffer = try .initCapacity(self.allocator, 32000),
+        .vertexBuffer = try .initCapacity(self.allocator, 32000),
+    };
+    defer solid_buffer.deinit(self.allocator);
 
-    try r_chunk.inner.hookupBuffers(
+    var transparent_buffer = chunks.Chunk.ChunkBuffer{
+        .indexBuffer = try .initCapacity(self.allocator, 32000),
+        .vertexBuffer = try .initCapacity(self.allocator, 32000),
+    };
+    defer transparent_buffer.deinit(self.allocator);
+    try chunk.gen_mesh(sides, self.allocator, &solid_buffer, &transparent_buffer);
+
+    std.debug.print("Putting thing\n", .{});
+
+    try self.solid_meshes.put(chunk_pos, try .init(
+        solid_buffer.vertexBuffer.items,
+        solid_buffer.indexBuffer.items,
         self.vki,
         self.dev,
         self.physical_device,
@@ -2042,31 +2047,35 @@ fn genMesh(self: *Self, chunk_pos: IVec3) !void {
         self.graphics_queue,
         self.chunk_descriptor_set_layout,
         self.chunks_descriptor_pool,
-        &self.mesh_buffers_array,
-        self.allocator,
-    );
+    ));
 
-    const t_r_chunk = state.transparentMeshMap.getPtr(key).?;
+    if (transparent_buffer.indexBuffer.items.len > 0) {
+        try self.transparent_meshes.put(chunk_pos, try .init(
+            transparent_buffer.vertexBuffer.items,
+            transparent_buffer.indexBuffer.items,
+            self.vki,
+            self.dev,
+            self.physical_device,
+            self.command_pool,
+            self.graphics_queue,
+            self.chunk_descriptor_set_layout,
+            self.chunks_descriptor_pool,
+        ));
+    }
+}
 
-    try t_r_chunk.inner.hookupBuffers(
-        self.vki,
-        self.dev,
-        self.physical_device,
-        self.command_pool,
-        self.graphics_queue,
-        self.chunk_descriptor_set_layout,
-        self.chunks_descriptor_pool,
-        &self.mesh_buffers_array,
-        self.allocator,
-    );
+fn genMeshPanic(self: *Self, pos: IVec3) void {
+    self.genMesh(pos) catch unreachable;
 }
 
 fn mainLoop(self: *Self) !void {
-    var chunk_iter = state.solidMeshMap.keyIterator();
+    var gen_mesh_pool: std.Thread.Pool = undefined;
+    try gen_mesh_pool.init(.{ .allocator = self.allocator });
+    var chunk_iter = state.chunkMap.keyIterator();
     while (chunk_iter.next()) |pos| {
-        const thread = try std.Thread.spawn(.{}, genMesh, .{ self, pos.* });
-        thread.detach();
+        self.genMeshPanic(pos.*);
     }
+    gen_mesh_pool.deinit();
 
     while (!glfw.windowShouldClose(self.window)) {
         self.time_diff_ns = (try std.time.Instant.now()).since(self.last_frame_time);
@@ -2282,28 +2291,23 @@ fn cleanup(self: *Self) void {
 
     self.cleanupSwapChain();
 
-    var mesh_iter = state.solidMeshMap.iterator();
+    var mesh_iter = self.solid_meshes.iterator();
     while (mesh_iter.next()) |mesh| {
-        mesh.value_ptr.inner.deinit(
+        mesh.value_ptr.deinit(
             self.dev,
             self.chunks_descriptor_pool,
-            &self.mesh_buffers_array,
-            self.allocator,
         ) catch unreachable;
     }
-    mesh_iter = state.transparentMeshMap.iterator();
+    mesh_iter = self.transparent_meshes.iterator();
     while (mesh_iter.next()) |mesh| {
-        mesh.value_ptr.inner.deinit(
+        mesh.value_ptr.deinit(
             self.dev,
             self.chunks_descriptor_pool,
-            &self.mesh_buffers_array,
-            self.allocator,
         ) catch unreachable;
     }
-    self.mesh_buffers_array.deinit(self.allocator);
+    self.solid_meshes.deinit();
+    self.transparent_meshes.deinit();
 
-    state.solidMeshMap.deinit();
-    state.transparentMeshMap.deinit();
     state.chunkMap.deinit();
     state.recvChunkMeshQueue.deinit();
     state.genChunkMeshQueue.deinit();
@@ -2420,14 +2424,6 @@ fn initGame(self: *Self) !void {
     state.chunkMap = std.AutoHashMap(IVec3, chunks.Chunk).init(state.allocator);
     try state.chunkMap.ensureTotalCapacity(32 * 32);
 
-    self.mesh_buffers_array = try .init(self.allocator);
-
-    state.solidMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
-    try state.solidMeshMap.ensureTotalCapacity(32 * 32);
-
-    state.transparentMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
-    try state.transparentMeshMap.ensureTotalCapacity(32 * 32);
-
     state.chunksToRegen = zset.ArraySetManaged(IVec3).init(state.allocator);
 
     state.chunkGenFuncs = std.array_list.Managed(chunks.ChunkGenFunc).init(state.allocator);
@@ -2444,16 +2440,6 @@ fn initGame(self: *Self) !void {
 
     inline for (.{ IVec3.zero, IVec3.new(1.0, 0.0, 1.0) }) |pos| {
         try chunks.genChunk(&state.chunkMap, pos);
-        const rc = try chunks.genMeshSidesGeneric(pos, .{});
-        const rChunk = rc;
-
-        inline for (.{ "solid", "transparent" }) |field| {
-            const mesh = @field(rChunk, field);
-            try @field(state, field ++ "MeshMap").put(pos, .{
-                .inner = mesh,
-                .uuid = rChunk.uuid,
-            });
-        }
     }
 
     state.workerThreadHandle = try std.Thread.spawn(

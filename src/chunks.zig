@@ -193,29 +193,31 @@ pub const Chunk = struct {
         return tmp;
     }
 
+    pub const ChunkBuffer = struct {
+        vertexBuffer: std.ArrayList(root.Vertex),
+        indexBuffer: std.ArrayList(u32),
+
+        pub fn deinit(self: *@This(), gpa: std.mem.Allocator) void {
+            self.vertexBuffer.deinit(gpa);
+            self.indexBuffer.deinit(gpa);
+        }
+    };
+
     pub noinline fn gen_mesh(
         self: *const @This(),
         neighbor_sides: Sides,
         allocator: std.mem.Allocator,
-    ) !struct {
-        solid: MeshData,
-        transparent: MeshData,
-    } {
+        solid_buffers: *ChunkBuffer,
+        transparent_buffer: *ChunkBuffer,
+    ) !void {
         var solid_maxOffset: u32 = 0;
         var transparent_maxOffset: u32 = 0;
 
-        const initial_len = 10240;
-        var solid_vertices = try std.array_list.Managed(root.Vertex).initCapacity(
-            allocator,
-            initial_len,
-        );
-        var solid_indices = try std.array_list.Managed(u32).initCapacity(
-            allocator,
-            initial_len,
-        );
+        const solid_vertices = &solid_buffers.vertexBuffer;
+        const solid_indices = &solid_buffers.indexBuffer;
 
-        var transparent_vertices = try std.array_list.Managed(root.Vertex).initCapacity(allocator, initial_len);
-        var transparent_indices = try std.array_list.Managed(u32).initCapacity(allocator, initial_len);
+        const transparent_vertices = &transparent_buffer.vertexBuffer;
+        const transparent_indices = &transparent_buffer.indexBuffer;
 
         for (self.blocks, 0..) |slice, x| {
             for (slice, 0..) |col, y| {
@@ -296,9 +298,9 @@ pub const Chunk = struct {
 
                                 if (index2 < 4) {
                                     if (blockStruct.transparent) {
-                                        try transparent_vertices.append(vert[index2]);
+                                        try transparent_vertices.append(allocator, vert[index2]);
                                     } else {
-                                        try solid_vertices.append(vert[index2]);
+                                        try solid_vertices.append(allocator, vert[index2]);
                                     }
                                 }
 
@@ -307,12 +309,12 @@ pub const Chunk = struct {
                                 const index = baseIndices[i];
                                 const newIndex: u32 = index + indexOffset;
                                 if (blockStruct.transparent) {
-                                    try transparent_indices.append(newIndex);
+                                    try transparent_indices.append(allocator, newIndex);
                                     if (newIndex > transparent_maxOffset) {
                                         transparent_maxOffset = newIndex;
                                     }
                                 } else {
-                                    try solid_indices.append(newIndex);
+                                    try solid_indices.append(allocator, newIndex);
                                     if (newIndex > solid_maxOffset) {
                                         solid_maxOffset = newIndex;
                                     }
@@ -331,17 +333,6 @@ pub const Chunk = struct {
 
         vertexCount += solid_vertices.items.len;
         chunkCount += 1;
-
-        return .{
-            .solid = MeshData{
-                .indices = solid_indices,
-                .vertices = solid_vertices,
-            },
-            .transparent = MeshData{
-                .indices = transparent_indices,
-                .vertices = transparent_vertices,
-            },
-        };
     }
 
     pub fn gen_sides(self: *const @This()) Sides {
@@ -741,7 +732,7 @@ pub const MeshBuffersPool = struct {
         }
     };
 
-    const Buffer = Mesh.Buffers;
+    const Buffer = Buffers;
 
     const FreeNode = struct {
         idx: u16,
@@ -826,27 +817,180 @@ pub const MeshBuffersPool = struct {
     }
 };
 
-pub const Mesh = struct {
-    const MAX_FRAMES_IN_FLIGHT = VulkanRender.MAX_FRAMES_IN_FLIGHT;
+const MAX_FRAMES_IN_FLIGHT = VulkanRender.MAX_FRAMES_IN_FLIGHT;
 
+pub const Buffers = struct {
+    vertexBuffer: vk.Buffer = .null_handle,
+    vertex_buffer_memory: vk.DeviceMemory = .null_handle,
+    indexBuffer: vk.Buffer = .null_handle,
+    index_buffer_memory: vk.DeviceMemory = .null_handle,
+
+    descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = @splat(.null_handle),
+
+    uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.Buffer = @splat(.null_handle),
+    uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.DeviceMemory = @splat(.null_handle),
+    uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = @splat(null),
+
+    index_count: usize,
+
+    const Self = @This();
+
+    pub fn init(
+        vertices: []root.Vertex,
+        indices: []u32,
+        vki: VulkanRender.InstanceWrapper,
+        dev: VulkanRender.Device,
+        physical_device: vk.PhysicalDevice,
+        command_pool: vk.CommandPool,
+        queue: vk.Queue,
+        descriptor_set_layout: vk.DescriptorSetLayout,
+        descriptor_pool: vk.DescriptorPool,
+    ) !Self {
+        var buffers: Buffers = .{ .index_count = indices.len };
+
+        try VulkanRender.createVertexBufferGeneric(
+            vki,
+            dev,
+            physical_device,
+            command_pool,
+            queue,
+            &buffers.vertexBuffer,
+            &buffers.vertex_buffer_memory,
+            vertices,
+        );
+
+        try VulkanRender.createIndexBufferGeneric(
+            vki,
+            dev,
+            physical_device,
+            command_pool,
+            queue,
+            indices,
+            &buffers.indexBuffer,
+            &buffers.index_buffer_memory,
+        );
+
+        const buffer_size = @sizeOf(VulkanRender.UniformBufferObject);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            try VulkanRender.createBufferGeneric(
+                vki,
+                dev,
+                physical_device,
+                buffer_size,
+                .{
+                    .uniform_buffer_bit = true,
+                },
+                .{
+                    .host_visible_bit = true,
+                    .host_coherent_bit = true,
+                },
+                &buffers.uniform_buffers[i],
+                &buffers.uniform_buffers_memory[i],
+            );
+
+            buffers.uniform_buffers_mapped[i] = try dev.mapMemory(
+                buffers.uniform_buffers_memory[i],
+                0,
+                buffer_size,
+                .{},
+            );
+        }
+
+        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSetLayout = @splat(descriptor_set_layout);
+        const alloc_info: vk.DescriptorSetAllocateInfo = .{
+            .descriptor_pool = descriptor_pool,
+            .descriptor_set_count = MAX_FRAMES_IN_FLIGHT,
+            .p_set_layouts = layouts[0..].ptr,
+        };
+
+        try dev.allocateDescriptorSets(&alloc_info, buffers.descriptor_sets[0..].ptr);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const buffer_info: vk.DescriptorBufferInfo = .{
+                .buffer = buffers.uniform_buffers[i],
+                .offset = 0,
+                .range = @sizeOf(VulkanRender.UniformBufferObject),
+            };
+
+            const descriptor_writes = [_]vk.WriteDescriptorSet{
+                .{
+                    .dst_set = buffers.descriptor_sets[i],
+                    .dst_binding = 0,
+                    .dst_array_element = 0,
+                    .descriptor_type = .uniform_buffer,
+                    .descriptor_count = 1,
+                    .p_buffer_info = @ptrCast(&buffer_info),
+                    .p_image_info = ([_]vk.DescriptorImageInfo{})[0..].ptr,
+                    .p_texel_buffer_view = ([_]vk.BufferView{})[0..].ptr,
+                },
+            };
+
+            dev.updateDescriptorSets(
+                @intCast(descriptor_writes.len),
+                descriptor_writes[0..].ptr,
+                0,
+                null,
+            );
+        }
+
+        return buffers;
+    }
+
+    pub fn updateUniformBuffer(
+        self: *Self,
+        current_image: usize,
+        ubo: VulkanRender.UniformBufferObject,
+    ) void {
+        const dest: *VulkanRender.UniformBufferObject = @ptrCast(@alignCast(
+            self.uniform_buffers_mapped[current_image],
+        ));
+        dest.* = ubo;
+    }
+
+    pub fn unmapBuffers(
+        self: *Self,
+        dev: VulkanRender.Device,
+        descriptor_pool: vk.DescriptorPool,
+    ) !void {
+        try dev.freeDescriptorSets(descriptor_pool, MAX_FRAMES_IN_FLIGHT, self.descriptor_sets[0..].ptr);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            dev.unmapMemory(self.uniform_buffers_memory[i]);
+            dev.destroyBuffer(self.uniform_buffers[i], null);
+            dev.freeMemory(self.uniform_buffers_memory[i], null);
+        }
+
+        dev.destroyBuffer(self.vertexBuffer, null);
+        dev.freeMemory(self.vertex_buffer_memory, null);
+
+        dev.destroyBuffer(self.indexBuffer, null);
+        dev.freeMemory(self.index_buffer_memory, null);
+    }
+
+    pub fn deinit(
+        self: *Self,
+        dev: VulkanRender.Device,
+        descriptor_pool: vk.DescriptorPool,
+    ) !void {
+        try self.unmapBuffers(dev, descriptor_pool);
+    }
+
+    pub fn swapInplace(self: *@This(), other: @This()) void {
+        var otherMut = other;
+        inline for (.{ "vertices", "indices" }) |field| {
+            std.mem.swap(@FieldType(@This(), field), &@field(self, field), &@field(otherMut, field));
+        }
+        otherMut.deinit();
+    }
+};
+
+pub const Mesh = struct {
     const Self = @This();
 
     vertices: std.array_list.Managed(root.Vertex) = .init(emptyAlloc),
     indices: std.array_list.Managed(u32) = .init(emptyAlloc),
     buffers: MeshBuffersPool.Index = .null_index,
-
-    pub const Buffers = struct {
-        vertexBuffer: vk.Buffer = .null_handle,
-        vertex_buffer_memory: vk.DeviceMemory = .null_handle,
-        indexBuffer: vk.Buffer = .null_handle,
-        index_buffer_memory: vk.DeviceMemory = .null_handle,
-
-        descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = @splat(.null_handle),
-
-        uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.Buffer = @splat(.null_handle),
-        uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.DeviceMemory = @splat(.null_handle),
-        uniform_buffers_mapped: [MAX_FRAMES_IN_FLIGHT]?*anyopaque = @splat(null),
-    };
 
     pub fn deinit(
         self: *@This(),
@@ -1453,11 +1597,9 @@ pub fn genMeshSides(
 }
 
 pub fn genMeshSidesGeneric(
-    pos: IVec3,
     neighbors: NeighborChunks,
-) !@FieldType(state.recvChunkMeshQueue.innerT(), "rc") {
+) !Sides {
     var out: Sides = Sides.AllAir;
-    var chunk = state.chunkMap.get(pos) orelse return error.NoChunk;
 
     inline for ([_][]const u8{ "x", "z" }) |dir| {
         inline for ([_]i64{ 1, -1 }) |offset| {
@@ -1493,32 +1635,5 @@ pub fn genMeshSidesGeneric(
         }
     }
 
-    const meshData = try chunk.gen_mesh(out, state.allocator);
-
-    var rc: @FieldType(state.recvChunkMeshQueue.innerT(), "rc") = .{
-        .uuid = chunk.uuid,
-        .solid = .{},
-        .transparent = .{},
-    };
-
-    inline for (mesh_variants) |variant| {
-        const data: Chunk.MeshData = @field(meshData, variant);
-        errdefer data.indices.deinit();
-        errdefer data.vertices.deinit();
-
-        if (data.indices.items.len == 0 or data.vertices.items.len == 0) {
-            data.indices.deinit();
-            data.vertices.deinit();
-        } else {
-            const mesh = Mesh{
-                .vertices = data.vertices,
-                .indices = data.indices,
-                .buffers = .null_index,
-            };
-
-            @field(rc, variant) = mesh;
-        }
-    }
-
-    return rc;
+    return out;
 }
