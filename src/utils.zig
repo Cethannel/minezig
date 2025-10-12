@@ -648,3 +648,9 @@ pub fn testAABBAgainstFrustum(mvp: zlm.Mat4, aabb: *const AABB) bool {
 fn within(lower: f32, point: f32, upper: f32) bool {
     return lower <= point and point <= upper;
 }
+
+const Empty = struct {};
+
+pub fn AutoArrayHashSet(K: type) type {
+    return std.AutoArrayHashMap(K, Empty);
+}

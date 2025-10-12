@@ -586,6 +586,21 @@ pub fn regenNeighborMeshes(chunkPos: IVec3) !void {
     }
 }
 
+pub fn regenNeighborMeshesGeneric(
+    to_regen_mesh_map: *utils.AutoArrayHashSet(IVec3),
+    chunkPos: IVec3,
+) !void {
+    inline for ([_][]const u8{ "x", "z" }) |dir| {
+        inline for ([_]i64{ 1, -1 }) |offset| {
+            var offsetVec = IVec3.zero;
+            @field(offsetVec, dir) = offset;
+
+            const newPos = chunkPos.add(offsetVec);
+            try to_regen_mesh_map.put(newPos, .{});
+        }
+    }
+}
+
 pub fn mark_chunk_for_regen(pos: IVec3) !void {
     if (state.chunkMap.contains(pos)) {
         _ = try state.chunksToRegen.add(pos);
@@ -1262,6 +1277,47 @@ pub fn renderDistanceGen() !void {
     }
 }
 
+pub fn renderDistanceGenGeneric(
+    renderDistance: u8,
+    player_pos: zlm.Vec3,
+    mesh_maps: []const VulkanRender.MeshMap,
+) !void {
+    const chunkPos = worldToChunkPos(player_pos);
+    const renderDistance2: u32 = @as(u32, @intCast(renderDistance)) * @as(u32, @intCast(renderDistance));
+
+    for (0..(renderDistance + 2) * 2) |dx| {
+        pos: for (0..(renderDistance + 2) * 2) |dy| {
+            const toGenPos = IVec3.new(
+                @as(i64, @intCast(dx)) - renderDistance + chunkPos,
+                @as(i64, @intCast(dy)) - renderDistance + chunkPos,
+                0,
+            );
+
+            if (toGenPos.distance2(chunkPos.chunkPos) > renderDistance2) {
+                continue;
+            }
+
+            if (state.chunkMap.contains(toGenPos)) {
+                for (mesh_maps) |mesh_map| {
+                    if (mesh_map.contains(toGenPos)) {
+                        continue :pos;
+                    }
+                }
+                try mark_chunk_for_regen(toGenPos);
+                continue :pos;
+            }
+
+            if (state.chunksInFlightSet.get(toGenPos) == null) {
+                try state.sendWorkerThreadQueue.enqueue(.{
+                    .GetChunk = toGenPos,
+                });
+
+                try state.chunksInFlightSet.put(toGenPos, .{});
+            }
+        }
+    }
+}
+
 fn getNumberTextures() usize {
     return state.atlas.len / 32;
 }
@@ -1516,10 +1572,10 @@ fn propGrass(chunk: *Chunk, chunkPos: IVec3) callconv(.c) void {
 }
 
 pub const NeighborChunks = struct {
-    x: ?*Chunk = null,
-    neg_x: ?*Chunk = null,
-    z: ?*Chunk = null,
-    neg_z: ?*Chunk = null,
+    x: ?*const Chunk = null,
+    neg_x: ?*const Chunk = null,
+    z: ?*const Chunk = null,
+    neg_z: ?*const Chunk = null,
 };
 
 pub fn genMeshSides(

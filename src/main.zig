@@ -239,6 +239,7 @@ pub fn main() !void {
         .allocator = gpa.allocator(),
         .solid_meshes = .init(gpa.allocator()),
         .transparent_meshes = .init(gpa.allocator()),
+        .meshes_to_regen = .init(gpa.allocator()),
     };
     try renderer.run();
 

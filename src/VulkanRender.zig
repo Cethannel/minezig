@@ -113,8 +113,12 @@ current_frame: usize = 0,
 last_frame_time: std.time.Instant = undefined,
 time_diff_ns: u64 = 0,
 
-solid_meshes: std.AutoHashMap(IVec3, chunks.Buffers),
-transparent_meshes: std.AutoHashMap(IVec3, chunks.Buffers),
+solid_meshes: MeshMap,
+transparent_meshes: MeshMap,
+meshes_to_regen: util.AutoArrayHashSet(IVec3),
+gen_mesh_pool: std.Thread.Pool = undefined,
+
+pub const MeshMap = std.AutoHashMap(IVec3, chunks.Buffers);
 
 const Self = @This();
 
@@ -141,8 +145,7 @@ const _device_extension_names_arr = blk: {
 };
 const device_extension_names: []const [*:0]const u8 = _device_extension_names_arr[0..];
 
-const enable_validation_layers = false;
-const _dsad = switch (builtin.mode) {
+const enable_validation_layers = switch (builtin.mode) {
     .Debug => true,
     .ReleaseFast => false,
     .ReleaseSafe => true,
@@ -1064,14 +1067,14 @@ fn createDescriptorPool(self: *Self) !void {
         const pool_sizes = [_]vk.DescriptorPoolSize{
             .{
                 .type = .uniform_buffer,
-                .descriptor_count = MAX_FRAMES_IN_FLIGHT * 512,
+                .descriptor_count = MAX_FRAMES_IN_FLIGHT * 4096,
             },
         };
 
         const pool_info: vk.DescriptorPoolCreateInfo = .{
             .pool_size_count = pool_sizes.len,
             .p_pool_sizes = pool_sizes[0..].ptr,
-            .max_sets = MAX_FRAMES_IN_FLIGHT * 512,
+            .max_sets = MAX_FRAMES_IN_FLIGHT * 4096,
             .flags = .{ .free_descriptor_set_bit = true },
         };
 
@@ -2020,7 +2023,13 @@ fn createSyncObjects(self: *Self) !void {
 
 fn genMesh(self: *Self, chunk_pos: IVec3) !void {
     std.debug.print("Generating mesh at: {f}\n", .{chunk_pos});
-    const sides = try chunks.genMeshSidesGeneric(.{});
+    const neighbors = chunks.NeighborChunks{
+        .x = state.chunkMap.getPtr(chunk_pos.add(.unitX)),
+        .neg_x = state.chunkMap.getPtr(chunk_pos.sub(.unitX)),
+        .z = state.chunkMap.getPtr(chunk_pos.add(.unitZ)),
+        .neg_z = state.chunkMap.getPtr(chunk_pos.sub(.unitZ)),
+    };
+    const sides = try chunks.genMeshSidesGeneric(neighbors);
     const chunk = state.chunkMap.getPtr(chunk_pos).?;
     var solid_buffer = chunks.Chunk.ChunkBuffer{
         .indexBuffer = try .initCapacity(self.allocator, 32000),
@@ -2035,7 +2044,15 @@ fn genMesh(self: *Self, chunk_pos: IVec3) !void {
     defer transparent_buffer.deinit(self.allocator);
     try chunk.gen_mesh(sides, self.allocator, &solid_buffer, &transparent_buffer);
 
-    std.debug.print("Putting thing\n", .{});
+    if (self.solid_meshes.fetchRemove(chunk_pos)) |kv| {
+        var mesh = kv.value;
+        try mesh.deinit(self.dev, self.descriptor_pool);
+    }
+
+    if (self.transparent_meshes.fetchRemove(chunk_pos)) |kv| {
+        var mesh = kv.value;
+        try mesh.deinit(self.dev, self.descriptor_pool);
+    }
 
     try self.solid_meshes.put(chunk_pos, try .init(
         solid_buffer.vertexBuffer.items,
@@ -2069,13 +2086,7 @@ fn genMeshPanic(self: *Self, pos: IVec3) void {
 }
 
 fn mainLoop(self: *Self) !void {
-    var gen_mesh_pool: std.Thread.Pool = undefined;
-    try gen_mesh_pool.init(.{ .allocator = self.allocator });
-    var chunk_iter = state.chunkMap.keyIterator();
-    while (chunk_iter.next()) |pos| {
-        self.genMeshPanic(pos.*);
-    }
-    gen_mesh_pool.deinit();
+    try self.gen_mesh_pool.init(.{ .allocator = self.allocator });
 
     while (!glfw.windowShouldClose(self.window)) {
         self.time_diff_ns = (try std.time.Instant.now()).since(self.last_frame_time);
@@ -2084,8 +2095,37 @@ fn mainLoop(self: *Self) !void {
 
         try self.playerMovement();
         try self.drawFrame();
+        try self.renderDistanceGen();
+        try self.getFromOtherThread();
+        try self.genMeshes();
     }
     try self.dev.deviceWaitIdle();
+
+    self.gen_mesh_pool.deinit();
+}
+
+fn getFromOtherThread(self: *Self) !void {
+    while (state.recvWorkerThreadQueue.dequeue()) |msg| {
+        switch (msg) {
+            .NewChunk => |chunk| {
+                _ = state.chunksInFlightSet.remove(chunk.pos);
+                try state.chunkMap.put(chunk.pos, chunk.chunk);
+                try self.meshes_to_regen.put(chunk.pos, .{});
+                try chunks.regenNeighborMeshesGeneric(&self.meshes_to_regen, chunk.pos);
+            },
+        }
+    }
+}
+
+fn genMeshes(self: *Self) !void {
+    const chunk_poss = self.meshes_to_regen.keys();
+
+    for (chunk_poss) |pos| {
+        if (!state.chunkMap.contains(pos)) continue;
+        try self.genMesh(pos);
+    }
+
+    self.meshes_to_regen.clearRetainingCapacity();
 }
 
 fn drawFrame(self: *Self) !void {
@@ -2307,6 +2347,7 @@ fn cleanup(self: *Self) void {
     }
     self.solid_meshes.deinit();
     self.transparent_meshes.deinit();
+    self.meshes_to_regen.deinit();
 
     state.chunkMap.deinit();
     state.recvChunkMeshQueue.deinit();
@@ -2437,10 +2478,6 @@ fn initGame(self: *Self) !void {
     try state.chunkPool.init(.{
         .allocator = state.allocator,
     });
-
-    inline for (.{ IVec3.zero, IVec3.new(1.0, 0.0, 1.0) }) |pos| {
-        try chunks.genChunk(&state.chunkMap, pos);
-    }
 
     state.workerThreadHandle = try std.Thread.spawn(
         .{},
@@ -2579,4 +2616,41 @@ fn keyCallback(
 fn getFromWindow(window: ?*glfw.Window) *Self {
     const self: *Self = @ptrCast(@alignCast(glfw.getWindowUserPointer(window).?));
     return self;
+}
+
+fn renderDistanceGen(self: *Self) !void {
+    const chunkPos = chunks.worldToChunkPos(self.camera_pos).chunkPos;
+    const renderDistance2: u32 = @as(u32, @intCast(state.renderDistance)) * @as(u32, @intCast(state.renderDistance));
+
+    for (0..(state.renderDistance + 2) * 2) |dx| {
+        pos: for (0..(state.renderDistance + 2) * 2) |dz| {
+            const toGenPos = IVec3.new(
+                @as(i64, @intCast(dx)) - state.renderDistance + chunkPos.x,
+                0,
+                @as(i64, @intCast(dz)) - state.renderDistance + chunkPos.z,
+            );
+
+            if (toGenPos.distance2(chunkPos) > renderDistance2) {
+                continue;
+            }
+
+            if (state.chunkMap.contains(toGenPos)) {
+                for ([_]*const MeshMap{ &self.solid_meshes, &self.transparent_meshes }) |mesh_map| {
+                    if (mesh_map.contains(toGenPos)) {
+                        continue :pos;
+                    }
+                }
+                try chunks.mark_chunk_for_regen(toGenPos);
+                continue :pos;
+            }
+
+            if (state.chunksInFlightSet.get(toGenPos) == null) {
+                try state.sendWorkerThreadQueue.enqueue(.{
+                    .GetChunk = toGenPos,
+                });
+
+                try state.chunksInFlightSet.put(toGenPos, .{});
+            }
+        }
+    }
 }
