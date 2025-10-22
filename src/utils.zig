@@ -4,7 +4,7 @@ const zlm = @import("zlm");
 
 pub const IVec3 = zlm.SpecializeOn(i64).Vec3;
 
-pub fn mspc(T: type) type {
+pub fn MSPC(T: type) type {
     const atomicsUsize = std.atomic.Value(usize);
 
     return struct {
@@ -12,7 +12,7 @@ pub fn mspc(T: type) type {
         head: atomicsUsize,
         tail: usize,
         max: usize,
-        buffer: []std.atomic.Value(?*T),
+        buffer: []?T,
         allocator: std.mem.Allocator,
 
         const Self = @This();
@@ -22,9 +22,9 @@ pub fn mspc(T: type) type {
         }
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) !Self {
-            var buffer = try allocator.alloc(std.atomic.Value(?*T), capacity);
+            var buffer = try allocator.alloc(?T, capacity);
             errdefer allocator.free(buffer);
-            @memset(buffer[0..], std.atomic.Value(?*T).init(null));
+            @memset(buffer[0..], null);
             return Self{
                 .count = atomicsUsize.init(0),
                 .head = atomicsUsize.init(0),
@@ -50,22 +50,16 @@ pub fn mspc(T: type) type {
                 return error.Full;
             }
 
-            const obj = try self.allocator.create(T);
-            obj.* = value;
-
             const head = self.head.fetchAdd(1, .acquire);
-            std.debug.assert(self.buffer[head % self.max].load(.acquire) == null);
-            const rv = self.buffer[head % self.max].rmw(.Xchg, obj, .release);
-            std.debug.assert(rv == null);
+            std.debug.assert(self.buffer[head % self.max] == null);
+            self.buffer[head % self.max] = value;
             return;
         }
 
         pub fn dequeue(self: *Self) ?T {
-            const retPtr = self.buffer[self.tail].rmw(.Xchg, null, .acquire);
-            if (retPtr == null) {
-                return null;
-            }
-            defer self.allocator.destroy(retPtr.?);
+            const out = self.buffer[self.tail] orelse return null;
+
+            self.buffer[self.tail] = null;
 
             self.tail += 1;
             if (self.tail >= self.max) {
@@ -73,9 +67,8 @@ pub fn mspc(T: type) type {
             }
 
             const r = self.count.fetchSub(1, .release);
-            std.debug.assert(r > 0);
-
-            return retPtr.?.*;
+            assert(r > 0, "Subtracted from zero");
+            return out;
         }
     };
 }
@@ -119,7 +112,7 @@ const values = [_]dataType{
 test "Single thread test" {
     const alloc = std.testing.allocator;
 
-    var queue = try mspc(dataType).init(alloc, 5);
+    var queue = try MSPC(dataType).init(alloc, 5);
     defer queue.deinit();
 
     for (values) |value| {
@@ -163,7 +156,7 @@ pub fn vec3ToIVec3(input: zlm.Vec3) zlm.SpecializeOn(i64).Vec3 {
     return out;
 }
 
-fn otherThread(data: []const dataType, queue: *mspc(dataType)) void {
+fn otherThread(data: []const dataType, queue: *MSPC(dataType)) void {
     for (data) |value| {
         queue.enqueue(value) catch unreachable;
     }
@@ -195,7 +188,7 @@ pub fn binaryInsertAssumeCapacity(
 test "Multi thread test" {
     const alloc = std.testing.allocator;
 
-    var queue = try mspc(dataType).init(alloc, 5);
+    var queue = try MSPC(dataType).init(alloc, 5);
     defer queue.deinit();
 
     var thread = try std.Thread.spawn(.{}, otherThread, .{ @as([]const dataType, values[0..]), &queue });

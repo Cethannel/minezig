@@ -60,6 +60,8 @@ chunks_descriptor_pool: vk.DescriptorPool = .null_handle,
 descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = @splat(.null_handle),
 command_buffers: [MAX_FRAMES_IN_FLIGHT]vk.CommandBuffer = @splat(.null_handle),
 
+buffers_to_free: [MAX_FRAMES_IN_FLIGHT]std.ArrayList(chunks.Buffers) = @splat(.empty),
+
 vertex_buffer: vk.Buffer = .null_handle,
 vertex_buffer_memory: vk.DeviceMemory = .null_handle,
 index_buffer: vk.Buffer = .null_handle,
@@ -102,8 +104,8 @@ sensitivity: f32 = 0.1,
 mouseX: f32 = 0.0,
 mouseY: f32 = 0.0,
 
-image_ready_for_write: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
-image_ready_for_present: [MAX_FRAMES_IN_FLIGHT]vk.Semaphore = @splat(.null_handle),
+image_ready_for_write: std.ArrayList(vk.Semaphore) = .empty,
+image_ready_for_present: std.ArrayList(vk.Semaphore) = .empty,
 in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence = @splat(.null_handle),
 
 frame_buffer_resized: bool = false,
@@ -117,6 +119,29 @@ solid_meshes: MeshMap,
 transparent_meshes: MeshMap,
 meshes_to_regen: util.AutoArrayHashSet(IVec3),
 gen_mesh_pool: std.Thread.Pool = undefined,
+gen_mesh_queues: [NUM_MESH_THREADS]util.MSPC(GenMesh) = undefined,
+gen_mesh_reciever: util.MSPC(GeneratedMesh) = undefined,
+gen_mesh_command_pools: [NUM_MESH_THREADS]vk.CommandPool = @splat(.null_handle),
+gen_mesh_descriptor_pools: [NUM_MESH_THREADS]vk.DescriptorPool = @splat(.null_handle),
+
+gen_mesh_vk_queue: vk.Queue = .null_handle,
+
+const NUM_MESH_THREADS = 4;
+const NUM_GEN_MESHES_IN_FLIGHT = 256;
+const NUM_MESH_RECIEVER = NUM_GEN_MESHES_IN_FLIGHT * NUM_MESH_THREADS;
+
+pub const GenMesh = struct {
+    pos: IVec3,
+    chunk_map: *const std.AutoHashMap(IVec3, chunks.Chunk),
+};
+
+pub const GeneratedMesh = struct {
+    chunk_pos: IVec3,
+    solid_mesh: ?chunks.Buffers,
+    transparent_mesh: ?chunks.Buffers,
+    command_buffer: vk.CommandBuffer,
+    work_finished: *std.atomic.Value(bool),
+};
 
 pub const MeshMap = std.AutoHashMap(IVec3, chunks.Buffers);
 
@@ -133,7 +158,9 @@ const HEIGHT = 600;
 pub const MAX_FRAMES_IN_FLIGHT = 2;
 
 const validation_layers: []const [*:0]const u8 = ([_][*:0]const u8{"VK_LAYER_KHRONOS_validation"})[0..];
-const device_extensions = [_][:0]const u8{vk.extensions.khr_swapchain.name};
+const device_extensions = [_][:0]const u8{
+    vk.extensions.khr_swapchain.name,
+};
 const _device_extension_names_arr = blk: {
     var out: [device_extensions.len][*:0]const u8 = undefined;
 
@@ -235,7 +262,7 @@ fn createInstance(self: *Self) !void {
         .application_version = @bitCast(vk.makeApiVersion(1, 0, 0, 0)),
         .p_engine_name = "No Engine",
         .engine_version = @bitCast(vk.makeApiVersion(1, 0, 0, 0)),
-        .api_version = @bitCast(vk.API_VERSION_1_0),
+        .api_version = @bitCast(vk.API_VERSION_1_3),
     };
 
     var create_info: vk.InstanceCreateInfo = .{
@@ -317,6 +344,8 @@ fn getRequiredExtensions(self: *Self) !std.ArrayList([*:0]const u8) {
         extensions.appendAssumeCapacity(vk.extensions.ext_debug_utils.name.ptr);
         try extensions.append(self.allocator, vk.extensions.ext_debug_report.name.ptr);
     }
+
+    try extensions.append(self.allocator, vk.extensions.khr_portability_enumeration.name.ptr);
 
     return extensions;
 }
@@ -417,6 +446,7 @@ fn pickPhysicalDevice(self: *Self) !void {
 const QueueFamilies = struct {
     graphics_family: ?u32 = null,
     present_family: ?u32 = null,
+    transfer_family: ?u32 = null,
 
     fn is_complete(self: *const @This()) bool {
         var out = true;
@@ -439,17 +469,22 @@ fn findQueueFamilies(self: *const Self, device: vk.PhysicalDevice) !QueueFamilie
 
     var i: u32 = 0;
 
+    std.log.info("Num queue families: {d}", .{queue_families.len});
+
+    var num_transfer_queues: u32 = 0;
+
     for (queue_families) |queue_family| {
-        if (queue_family.queue_flags.graphics_bit) {
+        if (queue_indices.graphics_family == null and queue_family.queue_flags.graphics_bit) {
             queue_indices.graphics_family = i;
         }
 
-        if (try self.vki.getPhysicalDeviceSurfaceSupportKHR(device, i, self.surface) == .true) {
+        if (queue_indices.present_family == null and try self.vki.getPhysicalDeviceSurfaceSupportKHR(device, i, self.surface) == .true) {
             queue_indices.present_family = i;
         }
 
-        if (queue_indices.is_complete()) {
-            break;
+        if (num_transfer_queues < queue_family.queue_count and queue_family.queue_flags.transfer_bit) {
+            queue_indices.transfer_family = i;
+            num_transfer_queues = queue_family.queue_count;
         }
 
         i += 1;
@@ -549,9 +584,29 @@ fn createLogicalDevice(self: *Self) !void {
     var queue_create_infos = std.AutoArrayHashMap(u32, vk.DeviceQueueCreateInfo).init(self.allocator);
     defer queue_create_infos.deinit();
 
+    const QueueFamily = struct {
+        queue_index: u32,
+        queue_count: u32,
+    };
+
+    const families = [_]QueueFamily{
+        .{
+            .queue_index = queue_indices.graphics_family.?,
+            .queue_count = 1,
+        },
+        .{
+            .queue_index = queue_indices.present_family.?,
+            .queue_count = 1,
+        },
+        .{
+            .queue_index = queue_indices.transfer_family.?,
+            .queue_count = 1,
+        },
+    };
+
     const queue_priority: f32 = 1.0;
-    inline for (std.meta.fields(QueueFamilies)) |field| {
-        const queue_family: u32 = @field(queue_indices, field.name).?;
+    inline for (families) |family| {
+        const queue_family: u32 = family.queue_index;
         if (!queue_create_infos.contains(queue_family)) {
             const queue_create_info: vk.DeviceQueueCreateInfo = .{
                 .queue_family_index = queue_family,
@@ -564,6 +619,7 @@ fn createLogicalDevice(self: *Self) !void {
 
     const device_features: vk.PhysicalDeviceFeatures = .{
         .sampler_anisotropy = .true,
+        .sample_rate_shading = .true,
     };
 
     var create_info: vk.DeviceCreateInfo = .{
@@ -588,6 +644,7 @@ fn createLogicalDevice(self: *Self) !void {
 
     self.graphics_queue = self.vkd.getDeviceQueue(self.device, queue_indices.graphics_family.?, 0);
     self.present_queue = self.vkd.getDeviceQueue(self.device, queue_indices.present_family.?, 0);
+    self.gen_mesh_vk_queue = self.vkd.getDeviceQueue(self.device, queue_indices.transfer_family.?, 0);
 }
 
 fn createSurface(self: *Self) !void {
@@ -1067,18 +1124,22 @@ fn createDescriptorPool(self: *Self) !void {
         const pool_sizes = [_]vk.DescriptorPoolSize{
             .{
                 .type = .uniform_buffer,
-                .descriptor_count = MAX_FRAMES_IN_FLIGHT * 4096,
+                .descriptor_count = MAX_FRAMES_IN_FLIGHT * 8192 * NUM_MESH_THREADS,
             },
         };
 
         const pool_info: vk.DescriptorPoolCreateInfo = .{
             .pool_size_count = pool_sizes.len,
             .p_pool_sizes = pool_sizes[0..].ptr,
-            .max_sets = MAX_FRAMES_IN_FLIGHT * 4096,
+            .max_sets = MAX_FRAMES_IN_FLIGHT * 8192 * NUM_MESH_THREADS,
             .flags = .{ .free_descriptor_set_bit = true },
         };
 
         self.chunks_descriptor_pool = try self.dev.createDescriptorPool(&pool_info, null);
+
+        for (0..NUM_MESH_THREADS) |i| {
+            self.gen_mesh_descriptor_pools[i] = try self.dev.createDescriptorPool(&pool_info, null);
+        }
     }
 }
 
@@ -1557,6 +1618,15 @@ fn createCommandPool(self: *Self) !void {
     };
 
     self.command_pool = try self.dev.createCommandPool(&pool_info, null);
+
+    const gen_mesh_pool_info: vk.CommandPoolCreateInfo = .{
+        .flags = .{ .reset_command_buffer_bit = true },
+        .queue_family_index = queue_family_indices.transfer_family.?,
+    };
+
+    for (0..NUM_MESH_THREADS) |i| {
+        self.gen_mesh_command_pools[i] = try self.dev.createCommandPool(&gen_mesh_pool_info, null);
+    }
 }
 
 fn createDepthResources(self: *Self) !void {
@@ -1638,8 +1708,8 @@ fn atLeast(input: anytype, at_least: @TypeOf(input)) bool {
 fn createTextureImage(self: *Self) !void {
     const image_size = state.atlas.len;
 
-    const tex_width = 32;
-    const tex_height = image_size / 32;
+    const tex_width: u32 = 32;
+    const tex_height: u32 = @intCast(image_size / (tex_width * 4));
 
     var staging_buffer: vk.Buffer = .null_handle;
     var staging_buffer_memory: vk.DeviceMemory = .null_handle;
@@ -2014,14 +2084,441 @@ fn createSyncObjects(self: *Self) !void {
         .flags = .{ .signaled_bit = true },
     };
 
+    self.image_ready_for_write.deinit(self.allocator);
+    self.image_ready_for_present.deinit(self.allocator);
+    self.image_ready_for_write = try .initCapacity(self.allocator, self.swapchain_images.items.len);
+    self.image_ready_for_present = try .initCapacity(self.allocator, self.swapchain_images.items.len);
+
+    try self.image_ready_for_write.resize(self.allocator, self.swapchain_images.items.len);
+    try self.image_ready_for_present.resize(self.allocator, self.swapchain_images.items.len);
+
+    std.debug.assert(self.image_ready_for_write.items.len == self.swapchain_images.items.len);
+    std.debug.assert(self.image_ready_for_present.items.len == self.swapchain_images.items.len);
+
+    for (0..self.swapchain_images.items.len) |i| {
+        self.image_ready_for_present.items[i] = try self.dev.createSemaphore(&semaphore_info, null);
+        self.image_ready_for_write.items[i] = try self.dev.createSemaphore(&semaphore_info, null);
+    }
+
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        self.image_ready_for_present[i] = try self.dev.createSemaphore(&semaphore_info, null);
-        self.image_ready_for_write[i] = try self.dev.createSemaphore(&semaphore_info, null);
         self.in_flight_fences[i] = try self.dev.createFence(&fence_info, null);
     }
 }
 
-fn genMesh(self: *Self, chunk_pos: IVec3) !void {
+const GenMeshParams = struct {
+    allocator: std.mem.Allocator,
+    queue: *util.MSPC(GenMesh),
+    init_buffer_params: chunks.Buffers.InitVulkanParams,
+    return_queue: *util.MSPC(GeneratedMesh),
+};
+
+fn genMesh(params: GenMeshParams) void {
+    const allocator = params.allocator;
+
+    var solid_buffer = chunks.Chunk.ChunkBuffer{
+        .indexBuffer = std.ArrayList(u32).initCapacity(allocator, 32000) catch unreachable,
+        .vertexBuffer = std.ArrayList(Vertex).initCapacity(allocator, 32000) catch unreachable,
+    };
+    defer solid_buffer.deinit(allocator);
+
+    var transparent_buffer = chunks.Chunk.ChunkBuffer{
+        .indexBuffer = std.ArrayList(u32).initCapacity(allocator, 32000) catch unreachable,
+        .vertexBuffer = std.ArrayList(Vertex).initCapacity(allocator, 32000) catch unreachable,
+    };
+    defer transparent_buffer.deinit(allocator);
+
+    const StagingBufferInfo = struct {
+        buffer: *vk.Buffer,
+        memory: *vk.DeviceMemory,
+        size: vk.DeviceSize,
+        usage: vk.BufferUsageFlags,
+    };
+
+    var solid_vertex_staging_buffer: vk.Buffer = .null_handle;
+    var solid_vertex_staging_memory: vk.DeviceMemory = .null_handle;
+    var solid_index_staging_buffer: vk.Buffer = .null_handle;
+    var solid_index_staging_memory: vk.DeviceMemory = .null_handle;
+
+    var transparent_vertex_staging_buffer: vk.Buffer = .null_handle;
+    var transparent_vertex_staging_memory: vk.DeviceMemory = .null_handle;
+    var transparent_index_staging_buffer: vk.Buffer = .null_handle;
+    var transparent_index_staging_memory: vk.DeviceMemory = .null_handle;
+
+    const vertex_buffer_size = chunks.chunkWidth * chunks.chunkWidth * chunks.chunkHeight * 6 * 6 * @sizeOf(Vertex);
+    const index_buffer_size = chunks.chunkWidth * chunks.chunkWidth * chunks.chunkHeight * 6 * 6 * @sizeOf(u32);
+
+    const buffers = [_]StagingBufferInfo{
+        .{
+            .buffer = &solid_vertex_staging_buffer,
+            .memory = &solid_vertex_staging_memory,
+            .size = vertex_buffer_size,
+            .usage = .{ .transfer_src_bit = true },
+        },
+        .{
+            .buffer = &solid_index_staging_buffer,
+            .memory = &solid_index_staging_memory,
+            .size = index_buffer_size,
+            .usage = .{ .transfer_src_bit = true },
+        },
+        .{
+            .buffer = &transparent_vertex_staging_buffer,
+            .memory = &transparent_vertex_staging_memory,
+            .size = vertex_buffer_size,
+            .usage = .{ .transfer_src_bit = true },
+        },
+        .{
+            .buffer = &transparent_index_staging_buffer,
+            .memory = &transparent_index_staging_memory,
+            .size = index_buffer_size,
+            .usage = .{ .transfer_src_bit = true },
+        },
+    };
+
+    for (buffers) |buff| {
+        createBufferGeneric(
+            params.init_buffer_params.vki,
+            params.init_buffer_params.dev,
+            params.init_buffer_params.physical_device,
+            buff.size,
+            buff.usage,
+            .{ .host_visible_bit = true, .host_coherent_bit = true },
+            buff.buffer,
+            buff.memory,
+        ) catch |err| {
+            std.log.err("Failed to create staging buffer: {t}", .{err});
+            std.debug.panic("", .{});
+        };
+    }
+
+    const alloc_info: vk.CommandBufferAllocateInfo = .{
+        .level = .primary,
+        .command_pool = params.init_buffer_params.command_pool,
+        .command_buffer_count = 1,
+    };
+
+    var command_buffer: vk.CommandBuffer = .null_handle;
+    params.init_buffer_params.dev.allocateCommandBuffers(
+        &alloc_info,
+        @ptrCast(&command_buffer),
+    ) catch |err| {
+        std.debug.panic("Failed to allocate command buffer: {t}\n", .{err});
+    };
+    defer params.init_buffer_params.dev.freeCommandBuffers(
+        params.init_buffer_params.command_pool,
+        1,
+        @ptrCast(&command_buffer),
+    );
+
+    while (!state.close.load(.acquire)) : ({
+        std.Thread.yield() catch {};
+    }) {
+        const gen_mesh = params.queue.dequeue() orelse continue;
+
+        solid_buffer.indexBuffer.clearRetainingCapacity();
+        solid_buffer.vertexBuffer.clearRetainingCapacity();
+
+        transparent_buffer.indexBuffer.clearRetainingCapacity();
+        transparent_buffer.vertexBuffer.clearRetainingCapacity();
+
+        const chunk_pos = gen_mesh.pos;
+        const neighbors = chunks.NeighborChunks{
+            .x = state.chunkMap.getPtr(chunk_pos.add(.unitX)),
+            .neg_x = state.chunkMap.getPtr(chunk_pos.sub(.unitX)),
+            .z = state.chunkMap.getPtr(chunk_pos.add(.unitZ)),
+            .neg_z = state.chunkMap.getPtr(chunk_pos.sub(.unitZ)),
+        };
+        const sides = chunks.genMeshSidesGeneric(neighbors);
+        const chunk = state.chunkMap.getPtr(chunk_pos).?;
+        chunk.gen_mesh(sides, allocator, &solid_buffer, &transparent_buffer) catch |err| {
+            std.log.err("Failed to generate mesh at ({f}): {t}", .{ chunk_pos, err });
+            continue;
+        };
+
+        {
+            var vertex_mem = mapMemory(
+                Vertex,
+                params.init_buffer_params.dev,
+                solid_vertex_staging_memory,
+                vertex_buffer_size,
+            ) catch |err| {
+                std.log.err("Failed to map vertex memory: {t}", .{err});
+                continue;
+            };
+            var index_mem = mapMemory(
+                u32,
+                params.init_buffer_params.dev,
+                solid_index_staging_memory,
+                index_buffer_size,
+            ) catch |err| {
+                std.log.err("Failed to map index memory: {t}", .{err});
+                continue;
+            };
+            @memcpy(vertex_mem[0..solid_buffer.vertexBuffer.items.len], solid_buffer.vertexBuffer.items[0..]);
+            @memcpy(index_mem[0..solid_buffer.indexBuffer.items.len], solid_buffer.indexBuffer.items[0..]);
+
+            params.init_buffer_params.dev.unmapMemory(solid_vertex_staging_memory);
+            params.init_buffer_params.dev.unmapMemory(solid_index_staging_memory);
+        }
+
+        {
+            var vertex_mem = mapMemory(
+                Vertex,
+                params.init_buffer_params.dev,
+                transparent_vertex_staging_memory,
+                vertex_buffer_size,
+            ) catch |err| {
+                std.log.err("Failed to map vertex memory: {t}", .{err});
+                continue;
+            };
+            var index_mem = mapMemory(
+                u32,
+                params.init_buffer_params.dev,
+                transparent_index_staging_memory,
+                index_buffer_size,
+            ) catch |err| {
+                std.log.err("Failed to map index memory: {t}", .{err});
+                continue;
+            };
+            @memcpy(
+                vertex_mem[0..transparent_buffer.vertexBuffer.items.len],
+                transparent_buffer.vertexBuffer.items[0..],
+            );
+            @memcpy(
+                index_mem[0..transparent_buffer.indexBuffer.items.len],
+                transparent_buffer.indexBuffer.items[0..],
+            );
+
+            params.init_buffer_params.dev.unmapMemory(transparent_vertex_staging_memory);
+            params.init_buffer_params.dev.unmapMemory(transparent_index_staging_memory);
+        }
+
+        const begin_info: vk.CommandBufferBeginInfo = .{ .flags = .{ .one_time_submit_bit = true } };
+
+        const dev: Device = params.init_buffer_params.dev;
+        dev.resetCommandBuffer(command_buffer, .{}) catch |err| {
+            std.log.err("Failed to reset command buffer: {t}", .{err});
+            continue;
+        };
+        params.init_buffer_params.dev.beginCommandBuffer(command_buffer, &begin_info) catch |err| {
+            std.log.err("Failed to begin command buffer: {t}", .{err});
+            continue;
+        };
+
+        var solid_vertex_buffer: vk.Buffer = .null_handle;
+        var solid_vertex_memory: vk.DeviceMemory = .null_handle;
+        var solid_index_buffer: vk.Buffer = .null_handle;
+        var solid_index_memory: vk.DeviceMemory = .null_handle;
+
+        var transparent_vertex_buffer: vk.Buffer = .null_handle;
+        var transparent_vertex_memory: vk.DeviceMemory = .null_handle;
+        var transparent_index_buffer: vk.Buffer = .null_handle;
+        var transparent_index_memory: vk.DeviceMemory = .null_handle;
+
+        const local_buffers = [_]StagingBufferInfo{
+            .{
+                .buffer = &solid_vertex_buffer,
+                .memory = &solid_vertex_memory,
+                .size = solid_buffer.vertexBuffer.items.len * @sizeOf(Vertex),
+                .usage = .{ .vertex_buffer_bit = true, .transfer_dst_bit = true },
+            },
+            .{
+                .buffer = &solid_index_buffer,
+                .memory = &solid_index_memory,
+                .size = solid_buffer.indexBuffer.items.len * @sizeOf(u32),
+                .usage = .{ .index_buffer_bit = true, .transfer_dst_bit = true },
+            },
+            .{
+                .buffer = &transparent_vertex_buffer,
+                .memory = &transparent_vertex_memory,
+                .size = transparent_buffer.vertexBuffer.items.len * @sizeOf(Vertex),
+                .usage = .{ .vertex_buffer_bit = true, .transfer_dst_bit = true },
+            },
+            .{
+                .buffer = &transparent_index_buffer,
+                .memory = &transparent_index_memory,
+                .size = transparent_buffer.indexBuffer.items.len * @sizeOf(u32),
+                .usage = .{ .index_buffer_bit = true, .transfer_dst_bit = true },
+            },
+        };
+
+        inline for (local_buffers) |buff| {
+            if (buff.size > 0) {
+                createBufferGeneric(
+                    params.init_buffer_params.vki,
+                    params.init_buffer_params.dev,
+                    params.init_buffer_params.physical_device,
+                    buff.size,
+                    buff.usage,
+                    .{ .device_local_bit = true },
+                    buff.buffer,
+                    buff.memory,
+                ) catch |err| {
+                    std.log.err("Failed to create staging buffer: {t}", .{err});
+                    std.debug.panic("", .{});
+                };
+            }
+        }
+
+        // Copy for solid vertex
+        if (solid_buffer.vertexBuffer.items.len > 0) {
+            const copy_region: vk.BufferCopy = .{
+                .src_offset = 0,
+                .dst_offset = 0,
+                .size = solid_buffer.vertexBuffer.items.len * @sizeOf(Vertex),
+            };
+            dev.cmdCopyBuffer(
+                command_buffer,
+                solid_vertex_staging_buffer,
+                solid_vertex_buffer,
+                1,
+                @ptrCast(&copy_region),
+            );
+        }
+
+        // Add for solid index
+        if (solid_buffer.indexBuffer.items.len > 0) {
+            const copy_region: vk.BufferCopy = .{
+                .src_offset = 0,
+                .dst_offset = 0,
+                .size = solid_buffer.indexBuffer.items.len * @sizeOf(u32),
+            };
+            dev.cmdCopyBuffer(
+                command_buffer,
+                solid_index_staging_buffer,
+                solid_index_buffer,
+                1,
+                @ptrCast(&copy_region),
+            );
+        }
+
+        // Copy for transparent vertex
+        if (transparent_buffer.vertexBuffer.items.len > 0) {
+            const copy_region: vk.BufferCopy = .{
+                .src_offset = 0,
+                .dst_offset = 0,
+                .size = transparent_buffer.vertexBuffer.items.len * @sizeOf(Vertex),
+            };
+            dev.cmdCopyBuffer(
+                command_buffer,
+                transparent_vertex_staging_buffer,
+                transparent_vertex_buffer,
+                1,
+                @ptrCast(&copy_region),
+            );
+        }
+
+        // Add for transparent index
+        if (transparent_buffer.indexBuffer.items.len > 0) {
+            const copy_region: vk.BufferCopy = .{
+                .src_offset = 0,
+                .dst_offset = 0,
+                .size = transparent_buffer.indexBuffer.items.len * @sizeOf(u32),
+            };
+            dev.cmdCopyBuffer(
+                command_buffer,
+                transparent_index_staging_buffer,
+                transparent_index_buffer,
+                1,
+                @ptrCast(&copy_region),
+            );
+        }
+
+        //@compileError("Do this for all things");
+
+        params.init_buffer_params.dev.endCommandBuffer(command_buffer) catch |err| {
+            std.log.err("Failed to end command buffer: {t}", .{err});
+            continue;
+        };
+
+        const solid_mesh: ?chunks.Buffers = solid_blk: {
+            if (solid_buffer.indexBuffer.items.len > 0) {
+                break :solid_blk chunks.Buffers.initWithBuffers(
+                    solid_vertex_buffer,
+                    solid_vertex_memory,
+                    solid_index_buffer,
+                    solid_index_memory,
+                    solid_buffer.indexBuffer.items.len,
+                    params.init_buffer_params,
+                ) catch |err| {
+                    std.log.err(
+                        "Failed to create solid vertex buffer at ({f}): {t}",
+                        .{ chunk_pos, err },
+                    );
+                    break :solid_blk null;
+                };
+            } else {
+                break :solid_blk null;
+            }
+        };
+
+        const transparent_mesh: ?chunks.Buffers = transparent_blk: {
+            if (transparent_buffer.indexBuffer.items.len > 0) {
+                break :transparent_blk chunks.Buffers.initWithBuffers(
+                    transparent_vertex_buffer,
+                    transparent_vertex_memory,
+                    transparent_index_buffer,
+                    transparent_index_memory,
+                    transparent_buffer.indexBuffer.items.len,
+                    params.init_buffer_params,
+                ) catch |err| {
+                    std.log.err(
+                        "Failed to create transparent vertex buffer at ({f}): {t}",
+                        .{ chunk_pos, err },
+                    );
+                    break :transparent_blk null;
+                };
+            } else {
+                break :transparent_blk null;
+            }
+        };
+
+        var work_finished: std.atomic.Value(bool) = .init(false);
+
+        params.return_queue.enqueue(.{
+            .chunk_pos = chunk_pos,
+            .solid_mesh = solid_mesh,
+            .transparent_mesh = transparent_mesh,
+            .command_buffer = command_buffer,
+            .work_finished = &work_finished,
+        }) catch |err| {
+            std.log.err("Failed to enqueue mesh at {f}: {t}", .{ chunk_pos, err });
+            if (solid_mesh) |r_mesh| {
+                var mesh = r_mesh;
+                mesh.deinit(
+                    params.init_buffer_params.dev,
+                ) catch {};
+            }
+
+            if (solid_mesh) |r_mesh| {
+                var mesh = r_mesh;
+                mesh.deinit(
+                    params.init_buffer_params.dev,
+                ) catch {};
+            }
+        };
+
+        while (!work_finished.load(.acquire) and !state.close.load(.acquire)) {
+            std.atomic.spinLoopHint();
+        }
+    }
+
+    for (buffers) |buff| {
+        params.init_buffer_params.dev.destroyBuffer(buff.buffer.*, null);
+        params.init_buffer_params.dev.freeMemory(buff.memory.*, null);
+    }
+}
+
+fn mapMemory(
+    comptime T: type,
+    dev: Device,
+    memory: vk.DeviceMemory,
+    size: vk.DeviceSize,
+) ![*]T {
+    const data = try dev.mapMemory(memory, 0, size, .{});
+    return @ptrCast(@alignCast(data));
+}
+
+fn genMeshOld(self: *Self, chunk_pos: IVec3) !void {
     std.debug.print("Generating mesh at: {f}\n", .{chunk_pos});
     const neighbors = chunks.NeighborChunks{
         .x = state.chunkMap.getPtr(chunk_pos.add(.unitX)),
@@ -2082,11 +2579,30 @@ fn genMesh(self: *Self, chunk_pos: IVec3) !void {
 }
 
 fn genMeshPanic(self: *Self, pos: IVec3) void {
-    self.genMesh(pos) catch unreachable;
+    self.genMeshOld(pos) catch unreachable;
 }
 
 fn mainLoop(self: *Self) !void {
-    try self.gen_mesh_pool.init(.{ .allocator = self.allocator });
+    try self.gen_mesh_pool.init(.{ .allocator = self.allocator, .n_jobs = NUM_MESH_THREADS });
+
+    for (0..NUM_MESH_THREADS) |i| {
+        try self.gen_mesh_pool.spawn(genMesh, .{
+            GenMeshParams{
+                .allocator = self.allocator,
+                .init_buffer_params = .{
+                    .vki = self.vki,
+                    .dev = self.dev,
+                    .physical_device = self.physical_device,
+                    .command_pool = self.gen_mesh_command_pools[i],
+                    .queue = self.gen_mesh_vk_queue,
+                    .descriptor_set_layout = self.chunk_descriptor_set_layout,
+                    .descriptor_pool = self.gen_mesh_descriptor_pools[i],
+                },
+                .queue = &self.gen_mesh_queues[i],
+                .return_queue = &self.gen_mesh_reciever,
+            },
+        });
+    }
 
     while (!glfw.windowShouldClose(self.window)) {
         self.time_diff_ns = (try std.time.Instant.now()).since(self.last_frame_time);
@@ -2100,8 +2616,6 @@ fn mainLoop(self: *Self) !void {
         try self.genMeshes();
     }
     try self.dev.deviceWaitIdle();
-
-    self.gen_mesh_pool.deinit();
 }
 
 fn getFromOtherThread(self: *Self) !void {
@@ -2119,26 +2633,73 @@ fn getFromOtherThread(self: *Self) !void {
 
 fn genMeshes(self: *Self) !void {
     const chunk_poss = self.meshes_to_regen.keys();
+    var enqueued: usize = 0;
+    const max_enqueued_per_frame = 64; // Adjust this value based on testing
 
+    var i: usize = 0;
     for (chunk_poss) |pos| {
         if (!state.chunkMap.contains(pos)) continue;
-        try self.genMesh(pos);
+        if (enqueued >= max_enqueued_per_frame) break;
+        try self.gen_mesh_queues[i].enqueue(.{
+            .chunk_map = &state.chunkMap,
+            .pos = pos,
+        });
+
+        enqueued += 1;
+        i = (i + 1) % NUM_MESH_THREADS;
     }
 
     self.meshes_to_regen.clearRetainingCapacity();
+
+    while (self.gen_mesh_reciever.dequeue()) |chunk| {
+        const submit_info: vk.SubmitInfo = .{
+            .command_buffer_count = 1,
+            .p_command_buffers = @ptrCast(&chunk.command_buffer),
+        };
+
+        try self.dev.queueSubmit(self.gen_mesh_vk_queue, 1, @ptrCast(&submit_info), .null_handle);
+        try self.dev.queueWaitIdle(self.gen_mesh_vk_queue);
+
+        if (self.solid_meshes.fetchRemove(chunk.chunk_pos)) |mesh| {
+            try self.buffers_to_free[self.current_frame].append(self.allocator, mesh.value);
+        }
+
+        if (self.transparent_meshes.fetchRemove(chunk.chunk_pos)) |mesh| {
+            try self.buffers_to_free[self.current_frame].append(self.allocator, mesh.value);
+        }
+
+        if (chunk.solid_mesh) |buffers| {
+            try self.solid_meshes.put(chunk.chunk_pos, buffers);
+        }
+
+        if (chunk.transparent_mesh) |buffers| {
+            try self.transparent_meshes.put(chunk.chunk_pos, buffers);
+        }
+
+        chunk.work_finished.store(true, .release);
+    }
 }
 
 fn drawFrame(self: *Self) !void {
     _ = try self.dev.waitForFences(1, self.in_flight_fences[self.current_frame..].ptr, .true, std.math.maxInt(u64));
 
+    try self.dev.queueWaitIdle(self.gen_mesh_vk_queue);
+
+    for (self.buffers_to_free[self.current_frame].items) |*item| {
+        try item.deinit(self.dev);
+    }
+    self.buffers_to_free[self.current_frame].clearRetainingCapacity();
+
+    try self.dev.resetFences(1, &.{self.in_flight_fences[self.current_frame]});
+
     const next_image_result = (try self.dev.acquireNextImageKHR(
         self.swapchain,
         std.math.maxInt(u64),
-        self.image_ready_for_write[self.current_frame],
-        self.in_flight_fences[self.current_frame],
+        self.image_ready_for_write.items[self.current_frame],
+        .null_handle,
     ));
 
-    if (next_image_result.result == .error_out_of_date_khr) {
+    if (next_image_result.result == .error_out_of_date_khr or next_image_result.result == .suboptimal_khr) {
         try self.recreateSwapChain();
         return;
     }
@@ -2155,7 +2716,7 @@ fn drawFrame(self: *Self) !void {
     );
 
     const wait_semaphores = [_]vk.Semaphore{
-        self.image_ready_for_write[self.current_frame],
+        self.image_ready_for_write.items[self.current_frame],
     };
     const wait_stages = [_]vk.PipelineStageFlags{
         .{
@@ -2163,7 +2724,7 @@ fn drawFrame(self: *Self) !void {
         },
     };
 
-    const singal_semaphores = [_]vk.Semaphore{self.image_ready_for_present[self.current_frame]};
+    const singal_semaphores = [_]vk.Semaphore{self.image_ready_for_present.items[image_index]};
 
     const submit_info: vk.SubmitInfo = .{
         .wait_semaphore_count = wait_semaphores.len,
@@ -2299,7 +2860,9 @@ fn recreateSwapChain(self: *Self) !void {
         glfw.waitEvents();
     }
 
+    std.log.info("Waiting for device to be idle", .{});
     try self.dev.deviceWaitIdle();
+    std.log.info("Device is idle", .{});
 
     self.cleanupSwapChain();
 
@@ -2322,38 +2885,41 @@ fn cleanupSwapChain(self: *Self) void {
         self.dev.destroyImageView(view, null);
     }
 
-    self.vkd.destroySwapchainKHR(self.device, self.swapchain, null);
+    self.dev.destroySwapchainKHR(self.swapchain, null);
 }
 
 fn cleanup(self: *Self) void {
     state.close.store(true, .release);
-    state.workerThreadHandle.join();
 
-    self.cleanupSwapChain();
+    defer state.workerThreadHandle.join();
+    self.gen_mesh_pool.deinit();
+
+    self.dev.deviceWaitIdle() catch unreachable;
 
     var mesh_iter = self.solid_meshes.iterator();
     while (mesh_iter.next()) |mesh| {
         mesh.value_ptr.deinit(
             self.dev,
-            self.chunks_descriptor_pool,
         ) catch unreachable;
     }
     mesh_iter = self.transparent_meshes.iterator();
     while (mesh_iter.next()) |mesh| {
         mesh.value_ptr.deinit(
             self.dev,
-            self.chunks_descriptor_pool,
         ) catch unreachable;
     }
     self.solid_meshes.deinit();
     self.transparent_meshes.deinit();
     self.meshes_to_regen.deinit();
-
     state.chunkMap.deinit();
     state.recvChunkMeshQueue.deinit();
     state.genChunkMeshQueue.deinit();
     state.recvWorkerThreadQueue.deinit();
     state.sendWorkerThreadQueue.deinit();
+    for (self.gen_mesh_queues[0..]) |*gen_mesh_queue| {
+        gen_mesh_queue.deinit();
+    }
+    self.gen_mesh_reciever.deinit();
     for (state.blocksArr.items) |*block| {
         block.deinit();
     }
@@ -2363,6 +2929,14 @@ fn cleanup(self: *Self) void {
     state.texturesArena.deinit();
 
     state.chunkPool.deinit();
+    self.cleanupSwapChain();
+
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        for (self.buffers_to_free[i].items) |*buff| {
+            buff.deinit(self.dev) catch unreachable;
+        }
+        self.buffers_to_free[i].deinit(self.allocator);
+    }
 
     self.dev.destroySampler(self.texture_image_sampler, null);
     self.dev.destroyImageView(self.texture_image_view, null);
@@ -2372,6 +2946,10 @@ fn cleanup(self: *Self) void {
 
     self.dev.destroyDescriptorPool(self.descriptor_pool, null);
     self.dev.destroyDescriptorPool(self.chunks_descriptor_pool, null);
+
+    for (0..NUM_MESH_THREADS) |i| {
+        self.dev.destroyDescriptorPool(self.gen_mesh_descriptor_pools[i], null);
+    }
 
     self.dev.destroyDescriptorSetLayout(self.descriptor_set_layout, null);
     self.dev.destroyDescriptorSetLayout(self.chunk_descriptor_set_layout, null);
@@ -2387,13 +2965,23 @@ fn cleanup(self: *Self) void {
 
     self.dev.destroyRenderPass(self.render_pass, null);
 
+    for (0..self.swapchain_images.items.len) |i| {
+        self.dev.destroySemaphore(self.image_ready_for_present.items[i], null);
+        self.dev.destroySemaphore(self.image_ready_for_write.items[i], null);
+    }
+
+    self.image_ready_for_present.deinit(self.allocator);
+    self.image_ready_for_write.deinit(self.allocator);
+
     for (0..MAX_FRAMES_IN_FLIGHT) |i| {
-        self.dev.destroySemaphore(self.image_ready_for_present[i], null);
-        self.dev.destroySemaphore(self.image_ready_for_write[i], null);
         self.dev.destroyFence(self.in_flight_fences[i], null);
     }
 
     self.dev.destroyCommandPool(self.command_pool, null);
+
+    for (0..NUM_MESH_THREADS) |i| {
+        self.dev.destroyCommandPool(self.gen_mesh_command_pools[i], null);
+    }
 
     self.swapchain_framebuffers.deinit(self.allocator);
 
@@ -2415,6 +3003,7 @@ fn cleanup(self: *Self) void {
 }
 
 fn initGame(self: *Self) !void {
+    state.close.store(false, .release);
     state.allocator = self.allocator;
     state.texturesArena = .init(self.allocator);
     state.textureMap = std.StringHashMap(u32).init(state.texturesArena.allocator());
@@ -2453,9 +3042,9 @@ fn initGame(self: *Self) !void {
 
     state.genChunkMeshQueue = try State.genChunkQueueT.init(state.allocator, 64 * 64);
 
-    state.sendWorkerThreadQueue = try util.mspc(workerThread.toWorkerThreadMessage) //
+    state.sendWorkerThreadQueue = try util.MSPC(workerThread.toWorkerThreadMessage) //
         .init(state.allocator, 1024);
-    state.recvWorkerThreadQueue = try util.mspc(workerThread.fromWorkerThreadMessage) //
+    state.recvWorkerThreadQueue = try util.MSPC(workerThread.fromWorkerThreadMessage) //
         .init(state.allocator, 1024);
 
     state.recvChunkMeshQueue = try @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64);
@@ -2484,6 +3073,16 @@ fn initGame(self: *Self) !void {
         workerThread.workerThread,
         .{},
     );
+
+    for (0..NUM_MESH_THREADS) |i| {
+        self.gen_mesh_queues[i] = try .init(self.allocator, NUM_GEN_MESHES_IN_FLIGHT);
+    }
+
+    self.gen_mesh_reciever = try .init(self.allocator, NUM_MESH_RECIEVER);
+
+    for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+        self.buffers_to_free[i] = try .initCapacity(self.allocator, 64);
+    }
 }
 
 fn beginSingleTimeCommandsGeneric(

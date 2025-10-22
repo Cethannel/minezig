@@ -841,6 +841,7 @@ pub const Buffers = struct {
     index_buffer_memory: vk.DeviceMemory = .null_handle,
 
     descriptor_sets: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSet = @splat(.null_handle),
+    descriptor_pool: vk.DescriptorPool = .null_handle,
 
     uniform_buffers: [MAX_FRAMES_IN_FLIGHT]vk.Buffer = @splat(.null_handle),
     uniform_buffers_memory: [MAX_FRAMES_IN_FLIGHT]vk.DeviceMemory = @splat(.null_handle),
@@ -850,9 +851,7 @@ pub const Buffers = struct {
 
     const Self = @This();
 
-    pub fn init(
-        vertices: []root.Vertex,
-        indices: []u32,
+    pub const InitVulkanParams = struct {
         vki: VulkanRender.InstanceWrapper,
         dev: VulkanRender.Device,
         physical_device: vk.PhysicalDevice,
@@ -860,26 +859,32 @@ pub const Buffers = struct {
         queue: vk.Queue,
         descriptor_set_layout: vk.DescriptorSetLayout,
         descriptor_pool: vk.DescriptorPool,
+    };
+
+    pub fn init(
+        vertices: []root.Vertex,
+        indices: []u32,
+        params: InitVulkanParams,
     ) !Self {
         var buffers: Buffers = .{ .index_count = indices.len };
 
         try VulkanRender.createVertexBufferGeneric(
-            vki,
-            dev,
-            physical_device,
-            command_pool,
-            queue,
+            params.vki,
+            params.dev,
+            params.physical_device,
+            params.command_pool,
+            params.queue,
             &buffers.vertexBuffer,
             &buffers.vertex_buffer_memory,
             vertices,
         );
 
         try VulkanRender.createIndexBufferGeneric(
-            vki,
-            dev,
-            physical_device,
-            command_pool,
-            queue,
+            params.vki,
+            params.dev,
+            params.physical_device,
+            params.command_pool,
+            params.queue,
             indices,
             &buffers.indexBuffer,
             &buffers.index_buffer_memory,
@@ -889,9 +894,9 @@ pub const Buffers = struct {
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             try VulkanRender.createBufferGeneric(
-                vki,
-                dev,
-                physical_device,
+                params.vki,
+                params.dev,
+                params.physical_device,
                 buffer_size,
                 .{
                     .uniform_buffer_bit = true,
@@ -904,7 +909,7 @@ pub const Buffers = struct {
                 &buffers.uniform_buffers_memory[i],
             );
 
-            buffers.uniform_buffers_mapped[i] = try dev.mapMemory(
+            buffers.uniform_buffers_mapped[i] = try params.dev.mapMemory(
                 buffers.uniform_buffers_memory[i],
                 0,
                 buffer_size,
@@ -912,14 +917,14 @@ pub const Buffers = struct {
             );
         }
 
-        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSetLayout = @splat(descriptor_set_layout);
+        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSetLayout = @splat(params.descriptor_set_layout);
         const alloc_info: vk.DescriptorSetAllocateInfo = .{
-            .descriptor_pool = descriptor_pool,
+            .descriptor_pool = params.descriptor_pool,
             .descriptor_set_count = MAX_FRAMES_IN_FLIGHT,
             .p_set_layouts = layouts[0..].ptr,
         };
 
-        try dev.allocateDescriptorSets(&alloc_info, buffers.descriptor_sets[0..].ptr);
+        try params.dev.allocateDescriptorSets(&alloc_info, buffers.descriptor_sets[0..].ptr);
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             const buffer_info: vk.DescriptorBufferInfo = .{
@@ -941,13 +946,15 @@ pub const Buffers = struct {
                 },
             };
 
-            dev.updateDescriptorSets(
+            params.dev.updateDescriptorSets(
                 @intCast(descriptor_writes.len),
                 descriptor_writes[0..].ptr,
                 0,
                 null,
             );
         }
+
+        buffers.descriptor_pool = params.descriptor_pool;
 
         return buffers;
     }
@@ -963,12 +970,11 @@ pub const Buffers = struct {
         dest.* = ubo;
     }
 
-    pub fn unmapBuffers(
+    pub fn deinit(
         self: *Self,
         dev: VulkanRender.Device,
-        descriptor_pool: vk.DescriptorPool,
     ) !void {
-        try dev.freeDescriptorSets(descriptor_pool, MAX_FRAMES_IN_FLIGHT, self.descriptor_sets[0..].ptr);
+        try dev.freeDescriptorSets(self.descriptor_pool, MAX_FRAMES_IN_FLIGHT, self.descriptor_sets[0..].ptr);
 
         for (0..MAX_FRAMES_IN_FLIGHT) |i| {
             dev.unmapMemory(self.uniform_buffers_memory[i]);
@@ -983,12 +989,88 @@ pub const Buffers = struct {
         dev.freeMemory(self.index_buffer_memory, null);
     }
 
-    pub fn deinit(
-        self: *Self,
-        dev: VulkanRender.Device,
-        descriptor_pool: vk.DescriptorPool,
-    ) !void {
-        try self.unmapBuffers(dev, descriptor_pool);
+    pub fn initWithBuffers(
+        vertex_buffer: vk.Buffer,
+        vertex_buffer_memory: vk.DeviceMemory,
+        index_buffer: vk.Buffer,
+        index_buffer_memory: vk.DeviceMemory,
+        index_count: usize,
+        params: InitVulkanParams,
+    ) !Self {
+        var buffers: Buffers = .{ .index_count = index_count };
+
+        buffers.indexBuffer = index_buffer;
+        buffers.index_buffer_memory = index_buffer_memory;
+        buffers.vertexBuffer = vertex_buffer;
+        buffers.vertex_buffer_memory = vertex_buffer_memory;
+
+        const buffer_size = @sizeOf(VulkanRender.UniformBufferObject);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            try VulkanRender.createBufferGeneric(
+                params.vki,
+                params.dev,
+                params.physical_device,
+                buffer_size,
+                .{
+                    .uniform_buffer_bit = true,
+                },
+                .{
+                    .host_visible_bit = true,
+                    .host_coherent_bit = true,
+                },
+                &buffers.uniform_buffers[i],
+                &buffers.uniform_buffers_memory[i],
+            );
+
+            buffers.uniform_buffers_mapped[i] = try params.dev.mapMemory(
+                buffers.uniform_buffers_memory[i],
+                0,
+                buffer_size,
+                .{},
+            );
+        }
+
+        var layouts: [MAX_FRAMES_IN_FLIGHT]vk.DescriptorSetLayout = @splat(params.descriptor_set_layout);
+        const alloc_info: vk.DescriptorSetAllocateInfo = .{
+            .descriptor_pool = params.descriptor_pool,
+            .descriptor_set_count = MAX_FRAMES_IN_FLIGHT,
+            .p_set_layouts = layouts[0..].ptr,
+        };
+
+        try params.dev.allocateDescriptorSets(&alloc_info, buffers.descriptor_sets[0..].ptr);
+
+        for (0..MAX_FRAMES_IN_FLIGHT) |i| {
+            const buffer_info: vk.DescriptorBufferInfo = .{
+                .buffer = buffers.uniform_buffers[i],
+                .offset = 0,
+                .range = @sizeOf(VulkanRender.UniformBufferObject),
+            };
+
+            const descriptor_writes = [_]vk.WriteDescriptorSet{
+                .{
+                    .dst_set = buffers.descriptor_sets[i],
+                    .dst_binding = 0,
+                    .dst_array_element = 0,
+                    .descriptor_type = .uniform_buffer,
+                    .descriptor_count = 1,
+                    .p_buffer_info = @ptrCast(&buffer_info),
+                    .p_image_info = ([_]vk.DescriptorImageInfo{})[0..].ptr,
+                    .p_texel_buffer_view = ([_]vk.BufferView{})[0..].ptr,
+                },
+            };
+
+            params.dev.updateDescriptorSets(
+                @intCast(descriptor_writes.len),
+                descriptor_writes[0..].ptr,
+                0,
+                null,
+            );
+        }
+
+        buffers.descriptor_pool = params.descriptor_pool;
+
+        return buffers;
     }
 
     pub fn swapInplace(self: *@This(), other: @This()) void {
@@ -1654,7 +1736,7 @@ pub fn genMeshSides(
 
 pub fn genMeshSidesGeneric(
     neighbors: NeighborChunks,
-) !Sides {
+) Sides {
     var out: Sides = Sides.AllAir;
 
     inline for ([_][]const u8{ "x", "z" }) |dir| {

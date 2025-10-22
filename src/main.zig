@@ -114,12 +114,12 @@ pub const State = struct {
 
     genChunkMeshQueue: genChunkQueueT = undefined,
 
-    sendWorkerThreadQueue: util.mspc(workerThread.toWorkerThreadMessage) = undefined,
-    recvWorkerThreadQueue: util.mspc(workerThread.fromWorkerThreadMessage) = undefined,
+    sendWorkerThreadQueue: util.MSPC(workerThread.toWorkerThreadMessage) = undefined,
+    recvWorkerThreadQueue: util.MSPC(workerThread.fromWorkerThreadMessage) = undefined,
 
     chunkPool: std.Thread.Pool = undefined,
 
-    recvChunkMeshQueue: util.mspc(struct { rc: struct {
+    recvChunkMeshQueue: util.MSPC(struct { rc: struct {
         solid: chunks.Mesh,
         transparent: chunks.Mesh,
         uuid: zuuid.Uuid,
@@ -145,7 +145,7 @@ pub const State = struct {
         .{ .r = 0x4c, .g = 0xaf, .b = 0x50 },
     },
 
-    renderDistance: u8 = 16,
+    renderDistance: u8 = 8,
 
     texturesArena: std.heap.ArenaAllocator = undefined,
     textureMap: std.StringHashMap(u32) = undefined,
@@ -169,7 +169,7 @@ pub const State = struct {
     };
 
     pub const chunksInFlightT = std.AutoHashMap(IVec3, struct {});
-    pub const genChunkQueueT = util.mspc(IVec3);
+    pub const genChunkQueueT = util.MSPC(IVec3);
 
     fn compChunks(ctx: genChunkContext, a: IVec3, b: IVec3) std.math.Order {
         _ = ctx;
@@ -339,9 +339,9 @@ fn init() callconv(.c) void {
 
     state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 64 * 64) catch unreachable;
 
-    state.sendWorkerThreadQueue = util.mspc(workerThread.toWorkerThreadMessage) //
+    state.sendWorkerThreadQueue = util.MSPC(workerThread.toWorkerThreadMessage) //
         .init(state.allocator, 1024) catch unreachable;
-    state.recvWorkerThreadQueue = util.mspc(workerThread.fromWorkerThreadMessage) //
+    state.recvWorkerThreadQueue = util.MSPC(workerThread.fromWorkerThreadMessage) //
         .init(state.allocator, 1024) catch unreachable;
 
     state.recvChunkMeshQueue = @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64) catch unreachable;

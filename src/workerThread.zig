@@ -26,19 +26,22 @@ pub const fromWorkerThreadMessage = union(enum) {
     },
 };
 
-var blockUpdateQueue: utils.mspc(utils.IVec3) = undefined;
+var blockUpdateQueue: utils.MSPC(utils.IVec3) = undefined;
 
 const ChunkMap = std.AutoHashMap(IVec3, chunks.Chunk);
 
 pub fn workerThread() void {
-    var dalloc = std.heap.DebugAllocator(.{}){};
-    var arena = std.heap.ArenaAllocator.init(dalloc.allocator());
+    const dalloc = std.heap.page_allocator;
+    var arena = std.heap.ArenaAllocator.init(dalloc);
     defer arena.deinit();
     const allocator = arena.allocator();
     var chunkMap = ChunkMap.init(allocator);
     var playerPos: ?zlm.Vec3 = null;
     defer chunkMap.deinit();
-    blockUpdateQueue = utils.mspc(utils.IVec3).init(state.allocator, 128) catch unreachable;
+    blockUpdateQueue = utils.MSPC(utils.IVec3).init(allocator, 128) catch |err| {
+        std.log.err("Failed to initialize block update queue: {t}", .{err});
+        unreachable;
+    };
     defer blockUpdateQueue.deinit();
 
     const frameTime = std.time.ns_per_s / 20;
@@ -46,15 +49,24 @@ pub fn workerThread() void {
     var updates = std.array_list.Managed(utils.IVec3).init(allocator);
     defer updates.clearAndFree();
 
+    std.log.info("Entering worker thread", .{});
     while (!state.close.load(.acquire)) {
         const start = std.time.nanoTimestamp();
         while (blockUpdateQueue.dequeue()) |update| {
-            updates.insert(0, update) catch unreachable;
+            updates.insert(0, update) catch |err| {
+                std.log.err("Failed to insert block update: {t}", .{err});
+                return;
+            };
         }
 
-        while (state.sendWorkerThreadQueue.dequeue()) |message| {
+        while (state.sendWorkerThreadQueue.dequeue()) |message| : ({
+            std.Thread.yield() catch {};
+        }) {
             switch (message) {
-                .GetChunk => |pos| getChunk(&chunkMap, pos) catch unreachable,
+                .GetChunk => |pos| getChunk(&chunkMap, pos) catch |err| {
+                    std.log.err("Failed to get chunk at {f}: {t}", .{ pos, err });
+                    continue;
+                },
                 .SetPlayerPos => |pos| playerPos = pos,
                 .SetBlock => |sbData| {
                     std.log.info("Setting block at: {f}", .{sbData.pos});
@@ -62,7 +74,10 @@ pub fn workerThread() void {
                         std.log.err("Failed to set block at: {f}", .{sbData.pos});
                     };
                     const cpos = chunks.worldToChunkPos(utils.ivec3ToVec3(sbData.pos));
-                    getChunk(&chunkMap, cpos.chunkPos) catch unreachable;
+                    getChunk(&chunkMap, cpos.chunkPos) catch |err| {
+                        std.log.err("Failed to get chunk at {f}: {t}", .{ cpos.chunkPos, err });
+                        continue;
+                    };
                     blockUpdateCallback(&sbData.pos);
                     inline for (.{ -1, 1 }) |x| {
                         inline for (.{ -1, 1 }) |z| {
@@ -100,6 +115,8 @@ pub fn workerThread() void {
             std.Thread.sleep(@intCast(diff));
         }
     }
+
+    std.log.info("Laving worker thread", .{});
 }
 
 fn getChunk(chunkMap: *ChunkMap, pos: IVec3) !void {
