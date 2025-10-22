@@ -145,7 +145,7 @@ pub const State = struct {
         .{ .r = 0x4c, .g = 0xaf, .b = 0x50 },
     },
 
-    renderDistance: u8 = 8,
+    renderDistance: u8 = 2,
 
     texturesArena: std.heap.ArenaAllocator = undefined,
     textureMap: std.StringHashMap(u32) = undefined,

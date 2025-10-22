@@ -184,8 +184,32 @@ pub fn run(self: *Self) !void {
     try self.initGame();
     try self.initWindow();
     try self.initVulkan();
+    try self.initThreads();
     try self.mainLoop();
     self.cleanup();
+}
+
+pub fn initThreads(self: *Self) !void {
+    try self.gen_mesh_pool.init(.{ .allocator = self.allocator, .n_jobs = NUM_MESH_THREADS });
+
+    for (0..NUM_MESH_THREADS) |i| {
+        try self.gen_mesh_pool.spawn(genMesh, .{
+            GenMeshParams{
+                .allocator = self.allocator,
+                .init_buffer_params = .{
+                    .vki = self.vki,
+                    .dev = self.dev,
+                    .physical_device = self.physical_device,
+                    .command_pool = self.gen_mesh_command_pools[i],
+                    .queue = self.gen_mesh_vk_queue,
+                    .descriptor_set_layout = self.chunk_descriptor_set_layout,
+                    .descriptor_pool = self.gen_mesh_descriptor_pools[i],
+                },
+                .queue = &self.gen_mesh_queues[i],
+                .return_queue = &self.gen_mesh_reciever,
+            },
+        });
+    }
 }
 
 fn initWindow(self: *Self) !void {
@@ -269,7 +293,7 @@ fn createInstance(self: *Self) !void {
         .p_application_info = &app_info,
     };
 
-    create_info.flags.enumerate_portability_bit_khr = true;
+    //create_info.flags.enumerate_portability_bit_khr = true;
 
     var required_extensions = try self.getRequiredExtensions();
     defer required_extensions.deinit(self.allocator);
@@ -345,7 +369,7 @@ fn getRequiredExtensions(self: *Self) !std.ArrayList([*:0]const u8) {
         try extensions.append(self.allocator, vk.extensions.ext_debug_report.name.ptr);
     }
 
-    try extensions.append(self.allocator, vk.extensions.khr_portability_enumeration.name.ptr);
+    //try extensions.append(self.allocator, vk.extensions.khr_portability_enumeration.name.ptr);
 
     return extensions;
 }
@@ -2583,29 +2607,9 @@ fn genMeshPanic(self: *Self, pos: IVec3) void {
     self.genMeshOld(pos) catch unreachable;
 }
 
-fn mainLoop(self: *Self) !void {
-    try self.gen_mesh_pool.init(.{ .allocator = self.allocator, .n_jobs = NUM_MESH_THREADS });
-
-    for (0..NUM_MESH_THREADS) |i| {
-        try self.gen_mesh_pool.spawn(genMesh, .{
-            GenMeshParams{
-                .allocator = self.allocator,
-                .init_buffer_params = .{
-                    .vki = self.vki,
-                    .dev = self.dev,
-                    .physical_device = self.physical_device,
-                    .command_pool = self.gen_mesh_command_pools[i],
-                    .queue = self.gen_mesh_vk_queue,
-                    .descriptor_set_layout = self.chunk_descriptor_set_layout,
-                    .descriptor_pool = self.gen_mesh_descriptor_pools[i],
-                },
-                .queue = &self.gen_mesh_queues[i],
-                .return_queue = &self.gen_mesh_reciever,
-            },
-        });
-    }
-
+noinline fn mainLoop(self: *Self) !void {
     while (!glfw.windowShouldClose(self.window)) {
+        @branchHint(.likely);
         self.time_diff_ns = (try std.time.Instant.now()).since(self.last_frame_time);
         self.last_frame_time = try .now();
         glfw.pollEvents();
@@ -2686,7 +2690,7 @@ fn genMeshes(self: *Self) !void {
 fn drawFrame(self: *Self) !void {
     _ = try self.dev.waitForFences(1, self.in_flight_fences[self.current_frame..].ptr, .true, std.math.maxInt(u64));
 
-    try self.dev.queueWaitIdle(self.gen_mesh_vk_queue);
+    //try self.dev.queueWaitIdle(self.gen_mesh_vk_queue);
 
     for (self.buffers_to_free[self.current_frame].items) |*item| {
         try item.deinit(self.dev);
