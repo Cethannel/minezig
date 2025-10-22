@@ -397,6 +397,7 @@ fn populateDebugMessengerCreateInfo() vk.DebugUtilsMessengerCreateInfoEXT {
             .verbose_bit_ext = true,
             .warning_bit_ext = true,
             .error_bit_ext = true,
+            .info_bit_ext = true,
         },
         .message_type = .{
             .general_bit_ext = true,
@@ -2660,12 +2661,14 @@ fn genMeshes(self: *Self) !void {
         try self.dev.queueSubmit(self.gen_mesh_vk_queue, 1, @ptrCast(&submit_info), .null_handle);
         try self.dev.queueWaitIdle(self.gen_mesh_vk_queue);
 
+        const previous_frame = (self.current_frame + MAX_FRAMES_IN_FLIGHT - 1) % MAX_FRAMES_IN_FLIGHT;
+
         if (self.solid_meshes.fetchRemove(chunk.chunk_pos)) |mesh| {
-            try self.buffers_to_free[self.current_frame].append(self.allocator, mesh.value);
+            try self.buffers_to_free[previous_frame].append(self.allocator, mesh.value);
         }
 
         if (self.transparent_meshes.fetchRemove(chunk.chunk_pos)) |mesh| {
-            try self.buffers_to_free[self.current_frame].append(self.allocator, mesh.value);
+            try self.buffers_to_free[previous_frame].append(self.allocator, mesh.value);
         }
 
         if (chunk.solid_mesh) |buffers| {
