@@ -50,12 +50,6 @@ pub fn build(b: *std.Build) !void {
 
     const glfw = b.dependency("glfw_zig", std_args);
 
-    const sdl_dep = b.dependency("sdl", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const sdl_lib = sdl_dep.artifact("SDL3");
-
     const imports: []const std.Build.Module.Import = &.{
         .{ .name = "zignal", .module = zignal_dependency.module("zignal") },
         .{ .name = "cimgui", .module = dep_cimgui.module("cimgui") },
@@ -89,8 +83,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
         .imports = imports,
     });
-
-    exe_mod.linkLibrary(sdl_lib);
 
     exe_mod.linkLibrary(glfw.artifact("glfw"));
 
