@@ -15,10 +15,6 @@
     // Once all dependencies are fetched, `zig build` no longer requires
     // internet connectivity.
     .dependencies = .{
-        .sokol = .{
-            .url = "git+https://github.com/floooh/sokol-zig.git#0831d1f15d2e1bc2d26a4556dba15b8962c29f00",
-            .hash = "sokol-0.1.0-pb1HKwHSLQAjEIRTGaVbHdtf6zt9VhNsOHuoVfTc2Z1i",
-        },
         .cimgui = .{
             .url = "git+https://github.com/floooh/dcimgui.git#de39f1d7106d448909d9776eb0049fbfed24d056",
             .hash = "cimgui-0.1.0-44ClkQ_ekgDNAf1N4Fl1mJnVDyO83xbcqQElNUtURXcA",
@@ -42,10 +38,6 @@
         .zignal = .{
             .url = "git+https://github.com/bfactory-ai/zignal#ab505e489ee674bb8ace89253e6f612c1004c2d3",
             .hash = "zignal-0.5.0-dev-OrZ3s2qyFACCwhi09PlDsKPUHpJDOhFFA0-KRurBqaoV",
-        },
-        .shdc = .{
-            .url = "git+https://github.com/floooh/sokol-tools-bin.git#d1a6a719f24852f104a7f5481beb31e42ebf5f8a",
-            .hash = "sokolshdc-0.1.0-r2KZDtYXlQS2C2CNekXgsRqhyKk5JtGzBlFBTMX27o0f",
         },
         .zlm = .{
             .url = "git+https://github.com/Cethannel/zlm.git#a5a4faa9537510f5d44f973dad9584ca0a3b9ef3",

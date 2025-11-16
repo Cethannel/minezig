@@ -2919,7 +2919,6 @@ fn cleanup(self: *Self) void {
     self.transparent_meshes.deinit();
     self.meshes_to_regen.deinit();
     state.chunkMap.deinit();
-    state.recvChunkMeshQueue.deinit();
     state.genChunkMeshQueue.deinit();
     state.recvWorkerThreadQueue.deinit();
     state.sendWorkerThreadQueue.deinit();
@@ -3054,8 +3053,6 @@ fn initGame(self: *Self) !void {
     state.recvWorkerThreadQueue = try util.MSPC(workerThread.fromWorkerThreadMessage) //
         .init(state.allocator, 1024);
 
-    state.recvChunkMeshQueue = try @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64);
-
     state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
 
     state.chunkMap = std.AutoHashMap(IVec3, chunks.Chunk).init(state.allocator);
@@ -3065,11 +3062,6 @@ fn initGame(self: *Self) !void {
 
     state.chunkGenFuncs = std.array_list.Managed(chunks.ChunkGenFunc).init(state.allocator);
     try chunks.add_builtin_gen_funcs();
-
-    state.pass_action.colors[0] = .{
-        .load_action = .CLEAR,
-        .clear_value = .{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 1 },
-    };
 
     try state.chunkPool.init(.{
         .allocator = state.allocator,

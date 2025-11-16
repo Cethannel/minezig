@@ -572,20 +572,6 @@ pub fn getBlockPtr(self: *const std.AutoHashMap(IVec3, Chunk), pos: IVec3) ?*Blo
     [@intCast(chunkPos.inChunkPos.z)];
 }
 
-pub fn regenNeighborMeshes(chunkPos: IVec3) !void {
-    inline for ([_][]const u8{ "x", "z" }) |dir| {
-        inline for ([_]i64{ 1, -1 }) |offset| {
-            var offsetVec = IVec3.zero;
-            @field(offsetVec, dir) = offset;
-
-            const newPos = chunkPos.add(offsetVec);
-            if (state.solidMeshMap.contains(newPos) or state.transparentMeshMap.contains(newPos)) {
-                try mark_chunk_for_regen(newPos);
-            }
-        }
-    }
-}
-
 pub fn regenNeighborMeshesGeneric(
     to_regen_mesh_map: *utils.AutoArrayHashSet(IVec3),
     chunkPos: IVec3,
@@ -1295,14 +1281,6 @@ fn inRangeGen(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
         return;
     }
 
-    if (state.chunkMap.contains(toGenPos)) {
-        if (!state.solidMeshMap.contains(toGenPos) and !state.transparentMeshMap.contains(toGenPos)) {
-            try mark_chunk_for_regen(toGenPos);
-        }
-
-        return;
-    }
-
     if (state.chunksInFlightSet.get(toGenPos) == null) {
         //std.log.info("Generating chunk in range at: {f}", .{toGenPos});
         try state.sendWorkerThreadQueue.enqueue(.{
@@ -1325,15 +1303,15 @@ fn outRangeDel(chunkPos: IVec3, toGenPos: IVec3, dist2: u32) !void {
         }
     }
 
-    if (state.solidMeshMap.fetchRemove(toGenPos)) |kv| {
-        var chunk = kv.value;
-        chunk.deinit();
-    }
+    //if (state.solidMeshMap.fetchRemove(toGenPos)) |kv| {
+    //    var chunk = kv.value;
+    //    chunk.deinit();
+    //}
 
-    if (state.transparentMeshMap.fetchRemove(toGenPos)) |kv| {
-        var chunk = kv.value;
-        chunk.deinit();
-    }
+    //if (state.transparentMeshMap.fetchRemove(toGenPos)) |kv| {
+    //    var chunk = kv.value;
+    //    chunk.deinit();
+    //}
 }
 
 /// Removes meshes outside chunk range
@@ -1659,80 +1637,6 @@ pub const NeighborChunks = struct {
     z: ?*const Chunk = null,
     neg_z: ?*const Chunk = null,
 };
-
-pub fn genMeshSides(
-    pos: IVec3,
-    neighbors: NeighborChunks,
-) !void {
-    var out: Sides = Sides.AllAir;
-    var chunk = state.chunkMap.get(pos) orelse return;
-
-    inline for ([_][]const u8{ "x", "z" }) |dir| {
-        inline for ([_]i64{ 1, -1 }) |offset| {
-            var offsetVec = IVec3.zero;
-            @field(offsetVec, dir) = offset;
-            var inChunkOffsetVec = zlm.SpecializeOn(usize).Vec3.zero;
-            @field(inChunkOffsetVec, dir) = @abs((offset - 1) / 2) * (chunkWidth - 1);
-            var dirMulti = zlm.SpecializeOn(usize).Vec3.one;
-            @field(dirMulti, dir) = 0;
-
-            const start = if (offset == 1) "" else "neg_";
-
-            if (@field(neighbors, start ++ dir)) |neibor| {
-                var side = &@field(out, dir);
-                if (offset == -1) {
-                    side = &@field(out, "neg_" ++ dir);
-                }
-                for (0..chunkWidth) |i| {
-                    for (0..chunkHeight) |y| {
-                        side[i][y] = neibor.blocks //
-                        [dirMulti.x * i + inChunkOffsetVec.x] //
-                            [dirMulti.y * y + inChunkOffsetVec.y] //
-                            [dirMulti.z * i + inChunkOffsetVec.z];
-                    }
-                }
-            } else {
-                if (offset == 1) {
-                    @field(out, dir) = @field(Sides.AllAir, "neg_" ++ dir);
-                } else if (offset == -1) {
-                    @field(out, "neg_" ++ dir) = @field(Sides.AllAir, dir);
-                }
-            }
-        }
-    }
-
-    const meshData = try chunk.gen_mesh(out, state.allocator);
-
-    var rc: @FieldType(state.recvChunkMeshQueue.innerT(), "rc") = .{
-        .uuid = chunk.uuid,
-        .solid = .{},
-        .transparent = .{},
-    };
-
-    inline for (mesh_variants) |variant| {
-        const data: Chunk.MeshData = @field(meshData, variant);
-        errdefer data.indices.deinit();
-        errdefer data.vertices.deinit();
-
-        if (data.indices.items.len == 0 or data.vertices.items.len == 0) {
-            data.indices.deinit();
-            data.vertices.deinit();
-        } else {
-            const mesh = Mesh{
-                .vertices = data.vertices,
-                .indices = data.indices,
-                .buffers = null,
-            };
-
-            @field(rc, variant) = mesh;
-        }
-    }
-
-    try state.recvChunkMeshQueue.enqueue(.{
-        .pos = pos,
-        .rc = rc,
-    });
-}
 
 pub fn genMeshSidesGeneric(
     neighbors: NeighborChunks,

@@ -1,12 +1,5 @@
 const std = @import("std");
-pub const sokol = @import("sokol");
 const ig = @import("cimgui");
-const sapp = sokol.app;
-const simgui = sokol.imgui;
-const sg = sokol.gfx;
-const sglue = sokol.glue;
-const slog = sokol.log;
-const sdtx = sokol.debugtext;
 const VulkanRender = @import("VulkanRender.zig");
 
 const vk = @import("vulkan");
@@ -24,9 +17,15 @@ const clay = @import("zclay");
 
 const zset = @import("ziglangSet");
 
-const c = if (config.controllerSupport) @cImport(
-    @cInclude("Gamepad.h"),
-) else struct {};
+const c = cblk: {
+    if (config.controllerSupport) {
+        break :cblk @cImport(
+            @cInclude("Gamepad.h"),
+        );
+    } else {
+        break :cblk struct {};
+    }
+};
 
 const Thread = std.Thread;
 
@@ -64,20 +63,10 @@ pub const std_options: std.Options = .{
     .log_level = .info,
 };
 
-pub const Mesh = struct {
-    vertexBuffer: sg.Buffer,
-    indexBuffer: sg.Buffer,
-    offset: Vec3,
-    numIndices: u32,
-};
-
 pub const State = struct {
     dx: f32 = 0.0,
     dy: f32 = 0.0,
     dz: f32 = 0.0,
-    pip: sg.Pipeline = .{},
-    bind: sg.Bindings = .{},
-    pass_action: sg.PassAction = .{},
     numIndices: u32 = 0,
     allocator: std.mem.Allocator = undefined,
     lockedMouse: bool = false,
@@ -86,7 +75,6 @@ pub const State = struct {
     mouse_down: bool = false,
     controllerMouseX: f32 = 0.0,
     controllerMouseY: f32 = 0.0,
-    text_pass_action: sg.PassAction = .{},
     atlas: []u8 = undefined,
 
     chunkMap: std.AutoHashMap(IVec3, chunks.Chunk) = undefined,
@@ -118,19 +106,6 @@ pub const State = struct {
     recvWorkerThreadQueue: util.MSPC(workerThread.fromWorkerThreadMessage) = undefined,
 
     chunkPool: std.Thread.Pool = undefined,
-
-    recvChunkMeshQueue: util.MSPC(struct { rc: struct {
-        solid: chunks.Mesh,
-        transparent: chunks.Mesh,
-        uuid: zuuid.Uuid,
-
-        const Self = @This();
-
-        pub fn deinit(self: *Self) void {
-            self.solid.deinit();
-            self.transparent.deinit();
-        }
-    }, pos: IVec3 }) = undefined,
 
     chunksInFlightSet: chunksInFlightT = undefined,
 
@@ -252,174 +227,7 @@ pub fn main() !void {
     }
 }
 
-pub fn start(allocator: std.mem.Allocator) !void {
-    state.allocator = allocator;
-
-    sapp.run(.{
-        .init_cb = init,
-        .frame_cb = frame,
-        .cleanup_cb = cleanup,
-        .event_cb = event_cb,
-        .width = window_w,
-        .height = window_h,
-        .icon = .{ .sokol_default = true },
-        .window_title = "minezig",
-        .sample_count = 4,
-        .logger = .{ .func = slog.func },
-        .swap_interval = 0,
-    });
-}
-
-fn init() callconv(.c) void {
-    if (config.controllerSupport) {
-        c.Gamepad_init();
-
-        c.Gamepad_buttonDownFunc(gamepad_buttonDownFunc, null);
-        c.Gamepad_buttonUpFunc(gamepad_buttonUpFunc, null);
-        c.Gamepad_axisMoveFunc(gamepad_axisMovedFunc, null);
-    }
-
-    sg.setup(.{
-        .environment = sglue.environment(),
-        .logger = .{ .func = slog.func },
-        .buffer_pool_size = 1024 * 8,
-    });
-
-    simgui.setup(.{
-        .logger = .{ .func = slog.func },
-    });
-
-    state.selector = selector.Selector.init(state.allocator) catch unreachable;
-    state.crosshair = crosshair.Crosshair.init();
-
-    state.textureMap = std.StringHashMap(u32).init(state.allocator);
-
-    state.blocksArr = std.array_list.Managed(blocks.Block).init(state.allocator);
-    state.blocksNameArr = std.array_list.Managed(u8).init(state.allocator);
-
-    state.blocksArr.append(blocks.AirBlock) catch unreachable;
-
-    defaultBlocks() catch unreachable;
-
-    for (state.blocksArr.items) |block| {
-        state.blocksNameArr.appendSlice(block.blockName.*) catch unreachable;
-        state.blocksNameArr.append(0) catch unreachable;
-    }
-    state.blocksNameArr.append(0) catch unreachable;
-
-    const blockTextures = textures.registerBlocks(state.blocksArr.items) catch unreachable;
-
-    defer state.allocator.free(blockTextures);
-
-    registerBlockUpdates();
-
-    state.atlas = textures.createAtlas(blockTextures, state.allocator) catch unreachable;
-
-    for (blockTextures, 0..) |blkName, i| {
-        const basePath = "assets/textures/";
-        const name = state.allocator.alloc(u8, blkName.len - "assets/textures/".len) catch unreachable;
-        @memcpy(name, blkName[basePath.len..]);
-        std.log.info("Adding texture name: {s}", .{name});
-        state.textureMap.put(name, @intCast(i)) catch unreachable;
-        state.allocator.free(blkName);
-    }
-
-    var img_desc: sg.ImageDesc = .{
-        .width = 32,
-        .height = @intCast(state.atlas.len / 32),
-    };
-    img_desc.data.subimage[0][0] = sg.asRange(state.atlas);
-    state.bind.views[shd.VIEW_tex] = sg.makeView(.{
-        .texture = .{
-            .image = sg.makeImage(img_desc),
-        },
-    });
-
-    state.bind.samplers[shd.SMP_smp] = sg.makeSampler(.{});
-
-    state.genChunkMeshQueue = State.genChunkQueueT.init(state.allocator, 64 * 64) catch unreachable;
-
-    state.sendWorkerThreadQueue = util.MSPC(workerThread.toWorkerThreadMessage) //
-        .init(state.allocator, 1024) catch unreachable;
-    state.recvWorkerThreadQueue = util.MSPC(workerThread.fromWorkerThreadMessage) //
-        .init(state.allocator, 1024) catch unreachable;
-
-    state.recvChunkMeshQueue = @TypeOf(state.recvChunkMeshQueue).init(state.allocator, 64 * 64) catch unreachable;
-
-    state.chunksInFlightSet = State.chunksInFlightT.init(state.allocator);
-
-    state.chunkMap = std.AutoHashMap(IVec3, chunks.Chunk).init(state.allocator);
-    state.chunkMap.ensureTotalCapacity(32 * 32) catch unreachable;
-
-    state.solidMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
-    state.solidMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
-
-    state.transparentMeshMap = chunks.chunkDataMap(chunks.Mesh).init(state.allocator);
-    state.transparentMeshMap.ensureTotalCapacity(32 * 32) catch unreachable;
-
-    state.chunksToRegen = zset.ArraySetManaged(IVec3).init(state.allocator);
-
-    state.chunkGenFuncs = std.array_list.Managed(chunks.ChunkGenFunc).init(state.allocator);
-    chunks.add_builtin_gen_funcs() catch unreachable;
-
-    state.pass_action.colors[0] = .{
-        .load_action = .CLEAR,
-        .clear_value = .{ .r = 0.25, .g = 0.5, .b = 0.75, .a = 1 },
-    };
-
-    // create a shader and pipeline object
-    var pip_desc: sg.PipelineDesc = .{
-        .index_type = .UINT32,
-        .shader = sg.makeShader(shd.texcubeShaderDesc(sg.queryBackend())),
-        .depth = .{
-            .compare = .LESS_EQUAL,
-            .write_enabled = true,
-        },
-        .cull_mode = .BACK,
-        .colors = colors: {
-            var out: [4]sg.ColorTargetState = [_]sg.ColorTargetState{.{}} ** 4;
-
-            out[0] = sg.ColorTargetState{
-                .blend = .{
-                    .enabled = true,
-                    .src_factor_rgb = .SRC_ALPHA,
-                    .dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
-                    .src_factor_alpha = .ONE,
-                    .dst_factor_alpha = .ZERO,
-                },
-            };
-
-            break :colors out;
-        },
-    };
-    pip_desc.layout.attrs[shd.ATTR_texcube_pos].format = .FLOAT3;
-    pip_desc.layout.attrs[shd.ATTR_texcube_texcoord0].format = .FLOAT2;
-    pip_desc.layout.attrs[shd.ATTR_texcube_normal0].format = .FLOAT3;
-    pip_desc.layout.attrs[shd.ATTR_texcube_modifierColor0].format = .FLOAT3;
-    state.pip = sg.makePipeline(pip_desc);
-
-    state.chunkPool.init(.{
-        .allocator = state.allocator,
-    }) catch unreachable;
-
-    var sdtx_desc: sdtx.Desc = .{ .logger = .{ .func = slog.func } };
-    sdtx_desc.fonts[KC854] = sdtx.fontKc854();
-    sdtx_desc.fonts[C64] = sdtx.fontC64();
-    sdtx_desc.fonts[ORIC] = sdtx.fontOric();
-    sdtx.setup(sdtx_desc);
-
-    state.text_pass_action.colors[0] = .{
-        .load_action = .LOAD,
-    };
-
-    state.workerThreadHandle = std.Thread.spawn(
-        .{},
-        workerThread.workerThread,
-        .{},
-    ) catch unreachable;
-}
-
-fn frame() callconv(.c) void {
+export fn frame() void {
     var frameAlloc = std.heap.ArenaAllocator.init(state.allocator);
     defer frameAlloc.deinit();
     const alloc = frameAlloc.allocator();
@@ -428,12 +236,6 @@ fn frame() callconv(.c) void {
     if (config.controllerSupport) {
         c.Gamepad_processEvents();
     }
-    simgui.newFrame(.{
-        .width = sapp.width(),
-        .height = sapp.height(),
-        .delta_time = sapp.frameDuration(),
-        .dpi_scale = sapp.dpiScale(),
-    });
 
     playerMovement() catch |err| {
         std.log.err(
@@ -468,22 +270,6 @@ fn frame() callconv(.c) void {
     state.selector.render();
     state.crosshair.render();
 
-    sdtx.print("Second\n", .{});
-
-    inline for (.{ "x", "y", "z" }) |dir| {
-        sdtx.print("{s}: {d:.2}\n", .{ dir, @field(state.cameraPos, dir) });
-    }
-
-    inline for (.{ KC854, C64, ORIC }) |font| {
-        const color = state.colors[font];
-        sdtx.font(font);
-        sdtx.color3b(color.r, color.g, color.b);
-        sdtx.print("Hello '{s}'!\n", .{"there"});
-    }
-
-    sdtx.font(KC854);
-    sdtx.color3b(255, 128, 0);
-
     uiRender() catch |err| {
         std.log.err(
             "Error while rendering the UI: {s}",
@@ -492,17 +278,7 @@ fn frame() callconv(.c) void {
     };
 }
 
-noinline fn uiRender() !void {
-    sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
-    sdtx.draw();
-    sg.endPass();
-
-    sg.beginPass(.{ .action = state.text_pass_action, .swapchain = sglue.swapchain() });
-    simgui.render();
-    sg.endPass();
-
-    sg.commit();
-}
+noinline fn uiRender() !void {}
 
 noinline fn recvWorker() !void {
     while (state.recvWorkerThreadQueue.dequeue()) |msg| {
@@ -510,7 +286,7 @@ noinline fn recvWorker() !void {
             .NewChunk => |nc| {
                 _ = state.chunksInFlightSet.remove(nc.pos);
                 try state.chunkMap.put(nc.pos, nc.chunk);
-                try chunks.regenNeighborMeshes(nc.pos);
+                //try chunks.regenNeighborMeshes(nc.pos);
                 try chunks.mark_chunk_for_regen(nc.pos);
             },
         }
@@ -529,27 +305,6 @@ fn clear_meshes(pos: IVec3) void {
 }
 
 noinline fn genMeshes() !void {
-    while (state.recvChunkMeshQueue.dequeue()) |rchunkthing| {
-        var rChunk = rchunkthing.rc;
-        if (state.chunkMap.getPtr(rchunkthing.pos)) |chunk| {
-            if (chunk.uuid != rChunk.uuid) {
-                rChunk.deinit();
-                continue;
-            }
-        }
-        inline for (.{ "solid", "transparent" }) |field| {
-            if (@field(state, field ++ "MeshMap").getPtr(rchunkthing.pos)) |data| {
-                data.deinit();
-            }
-            var mesh = @field(rChunk, field);
-            mesh.hookupBuffers();
-            try @field(state, field ++ "MeshMap").put(rchunkthing.pos, .{
-                .inner = mesh,
-                .uuid = rChunk.uuid,
-            });
-        }
-    }
-
     var chunksIter = state.chunksToRegen.iterator();
 
     while (chunksIter.next()) |entry| {
@@ -569,10 +324,6 @@ noinline fn genMeshes() !void {
                 }
             }
         }
-        try state.chunkPool.spawn(genMeshSidesWrapper, .{
-            chunkPos,
-            neighbors,
-        });
     }
 }
 
@@ -590,20 +341,7 @@ noinline fn eventQueue() !void {
     };
 }
 
-noinline fn worldRender() !void {
-    sg.endPass();
-    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
-    sg.applyPipeline(state.pip);
-    var chunkIter = state.solidMeshMap.iterator();
-    while (chunkIter.next()) |entry| {
-        try renderMesh(entry.value_ptr, entry.key_ptr);
-    }
-    chunkIter = state.transparentMeshMap.iterator();
-    while (chunkIter.next()) |entry| {
-        try renderMesh(entry.value_ptr, entry.key_ptr);
-    }
-    sg.endPass();
-}
+noinline fn worldRender() !void {}
 
 inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVec3) !void {
     if (state.chunkMap.getPtr(pos.*)) |chunk| {
@@ -618,15 +356,8 @@ inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVe
     if (mesh.inner.buffers) |buffs| {
         state.bind.vertex_buffers[0] = buffs.vertexBuffer;
         state.bind.index_buffer = buffs.indexBuffer;
-        sg.applyBindings(state.bind);
 
         const worldPos = chunks.chunkToWorldPos(pos.*);
-
-        const mvp = computeVsParams(
-            worldPos.x,
-            worldPos.y,
-            worldPos.z,
-        );
 
         if (state.enable_frustum_culling //
         and worldPos.swizzle("xz").distance2(state.cameraPos.swizzle("xz")) //
@@ -641,7 +372,7 @@ inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVe
                 }),
             };
             const tan_fov = @tan(0.5 * zlm.toRadians(state.fov + 30));
-            const aspect = sapp.widthf() / sapp.heightf();
+            const aspect = 321; // THIS IIS A BAD VALUE: SHOULD GET FROM WIIDTH / HEIGHT
             const frustrum: util.CullingFrustum = .{
                 .near_right = aspect * near * tan_fov,
                 .near_top = near * tan_fov,
@@ -659,19 +390,10 @@ inline fn renderMesh(mesh: *const chunks.chunkData(chunks.Mesh), pos: *const IVe
                 return;
             }
         }
-
-        const vs_params = shd.VsParams{
-            .mvp = mvp,
-        };
-        sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-        sg.draw(0, @intCast(mesh.inner.indices.items.len), 1);
     }
 }
 
 noinline fn imguiPass() !void {
-    sg.beginPass(.{ .action = state.pass_action, .swapchain = sglue.swapchain() });
-    sg.applyPipeline(state.pip);
-
     ig.igSetNextWindowPos(.{ .x = 400, .y = 10 }, ig.ImGuiCond_Once);
     ig.igSetNextWindowSize(.{ .x = 400, .y = 100 }, ig.ImGuiCond_Once);
     _ = ig.igBegin("Hello Dear ImGui!", 0, ig.ImGuiWindowFlags_None);
@@ -763,7 +485,7 @@ fn uiLayout() clay.ClayArray(clay.RenderCommand) {
 }
 
 noinline fn playerMovement() !void {
-    const dt: f32 = @floatCast(sapp.frameDuration() * 60);
+    const dt: f32 = @floatCast(0);
 
     state.pitch += state.controllerMouseY * dt;
     state.yaw += state.controllerMouseX * dt;
@@ -832,7 +554,6 @@ fn cleanup() callconv(.c) void {
     state.chunksToRegen.deinit();
     state.chunkGenFuncs.deinit();
     state.allocator.free(state.atlas);
-    sg.shutdown();
 
     state.chunkPool.deinit();
 
@@ -853,16 +574,21 @@ pub fn computeVsParams(rx: f32, ry: f32, rz: f32) zlm.Mat4 {
     );
 
     const model = mat4.createTranslationXYZ(rx, ry, rz);
-    const aspect = sapp.widthf() / sapp.heightf();
+    const aspect = 1.0;
     const proj = mat4.createPerspective(zlm.toRadians(state.fov), aspect, 0.01, 1000.0);
     const mvp = model.mul(view).mul(proj);
     return mvp;
 }
 
-fn event_cb(event_arr: [*c]const sapp.Event) callconv(.c) void {
-    const event = event_arr[0];
+const BadEvent = struct {
+    type: enum {
+        KEY_DOWN,
+        KEY_UP,
+    },
+};
 
-    _ = simgui.handleEvent(event);
+fn event_cb(event_arr: [*c]const BadEvent) callconv(.c) void {
+    const event = event_arr[0];
 
     switch (event.type) {
         .KEY_DOWN, .KEY_UP => {
@@ -895,7 +621,7 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.c) void {
                 },
                 .ESCAPE => {
                     if (event.type == .KEY_DOWN) {
-                        sapp.lockMouse(!sapp.mouseLocked());
+                        //sapp.lockMouse(!sapp.mouseLocked());
                     }
                 },
                 else => {},
@@ -903,7 +629,7 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.c) void {
         },
         .MOUSE_DOWN => {
             state.mouse_down = true;
-            if (sapp.mouseLocked()) {
+            if (true) { // Mouse is locked
                 switch (event.mouse_button) {
                     .LEFT => {
                         state.sendWorkerThreadQueue.enqueue(.{
@@ -937,7 +663,7 @@ fn event_cb(event_arr: [*c]const sapp.Event) callconv(.c) void {
             state.mouse_down = false;
         },
         .MOUSE_MOVE => {
-            if (sapp.mouseLocked()) {
+            if (true) { // mouse is locked
                 state.mouseX += event.mouse_x;
                 state.mouseY += event.mouse_y;
 
@@ -1216,13 +942,4 @@ fn logAtlas() !void {
     try writer.interface.writeSliceEndian(u32, state.atlas, .little);
     try writer.interface.flush();
     file.close();
-}
-
-fn genMeshSidesWrapper(
-    pos: IVec3,
-    neighbors: chunks.NeighborChunks,
-) void {
-    chunks.genMeshSides(pos, neighbors) catch |err| {
-        std.log.err("Failed to gen mesh: {}", .{err});
-    };
 }

@@ -3,8 +3,6 @@ const Build = std.Build;
 
 const textures = @import("src/textures.zig");
 
-pub const shdc = @import("shdc");
-
 // Although this function looks imperative, note that its job is to
 // declaratively construct a build graph that will be executed by an external
 // runner.
@@ -32,12 +30,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     };
 
-    const dep_sokol = b.dependency("sokol", .{
-        .target = target,
-        .optimize = optimize,
-        .with_sokol_imgui = true,
-    });
-
     const zignal_dependency = b.dependency("zignal", std_args);
 
     const zlm = b.dependency("zlm", .{});
@@ -64,11 +56,7 @@ pub fn build(b: *std.Build) !void {
     });
     const sdl_lib = sdl_dep.artifact("SDL3");
 
-    // inject the cimgui header search path into the sokol C library compile step
-    dep_sokol.artifact("sokol_clib").addIncludePath(dep_cimgui.path("src"));
-
     const imports: []const std.Build.Module.Import = &.{
-        .{ .name = "sokol", .module = dep_sokol.module("sokol") },
         .{ .name = "zignal", .module = zignal_dependency.module("zignal") },
         .{ .name = "cimgui", .module = dep_cimgui.module("cimgui") },
         .{ .name = "zlm", .module = zlm.module("zlm") },
@@ -188,15 +176,6 @@ pub fn build(b: *std.Build) !void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 
-    const shaderState = try buildShaders(
-        b,
-        target,
-        exe.root_module,
-        imports,
-    );
-
-    exe.step.dependOn(shaderState);
-
     const mangohud = b.addSystemCommand(&.{"mangohud"});
     mangohud.addFileArg(exe.getEmittedBin());
     mangohud.step.dependOn(&exe.step);
@@ -210,48 +189,6 @@ pub fn build(b: *std.Build) !void {
 
     const lldb_step = b.step("lldb", "Run exe with lldb");
     lldb_step.dependOn(&lldb.step);
-}
-
-fn buildShaders(
-    b: *Build,
-    target: Build.ResolvedTarget,
-    root_module: *Build.Module,
-    imports: []const std.Build.Module.Import,
-) !*Build.Step {
-    const shaders_dir = "src/shaders/";
-    const shaders = .{
-        "triangle.glsl",
-        "cube.glsl",
-        "selector.glsl",
-        "crosshair.glsl",
-    };
-
-    const shdc_step = b.step("shaders", "Compile shaders (needs ../sokol-tools-bin)");
-    inline for (shaders) |shader| {
-        const in_path: []const u8 = shaders_dir ++ shader;
-        const out_path: []const u8 = shaders_dir ++ shader ++ ".zig";
-        const create_shdc = try shdc.createSourceFile(b, .{
-            .shdc_dep = b.dependency("shdc", .{}),
-            .input = in_path,
-            .output = out_path,
-            .slang = .{
-                .metal_macos = true,
-                .hlsl5 = true,
-                .wgsl = true,
-                .glsl430 = true,
-            },
-            .reflection = true,
-        });
-        shdc_step.dependOn(create_shdc);
-        const shader_module = b.createModule(.{
-            .root_source_file = b.path(out_path),
-            .target = target,
-            .imports = imports,
-        });
-        root_module.addImport(shader, shader_module);
-    }
-
-    return shdc_step;
 }
 
 fn addWasmSupport(

@@ -3,10 +3,6 @@ pub const shd = @import("selector.glsl");
 
 const util = @import("utils.zig");
 
-const sokol = @import("sokol");
-const sg = sokol.gfx;
-const sglue = sokol.glue;
-
 const root = @import("main.zig");
 const state = &root.state;
 
@@ -32,12 +28,6 @@ pub const Selector = struct {
     vertices: std.array_list.Managed(Vertex) = undefined,
     indices: std.array_list.Managed(u32) = undefined,
     allocator: std.mem.Allocator = undefined,
-    bind: sg.Bindings = .{},
-    pip: sg.Pipeline = .{},
-    pass_action: sg.PassAction = .{},
-
-    vertexBuffer: sg.Buffer = .{},
-    indexBuffer: sg.Buffer = .{},
 
     t: f32 = std.math.floatMax(f32),
     last_t: f32 = std.math.floatMax(f32),
@@ -56,75 +46,72 @@ pub const Selector = struct {
         out.vertices = try std.array_list.Managed(Vertex).initCapacity(allocator, baseVertices.len);
         out.vertices.appendSliceAssumeCapacity(&baseVertices);
 
-        out.vertexBuffer = sg.makeBuffer(.{
-            .data = sg.asRange(out.vertices.items),
-        });
+        //out.vertexBuffer = sg.makeBuffer(.{
+        //    .data = sg.asRange(out.vertices.items),
+        //});
 
         out.indices = try std.array_list.Managed(u32).initCapacity(allocator, baseIndices.len);
         out.indices.appendSliceAssumeCapacity(&baseIndices);
 
-        out.indexBuffer = sg.makeBuffer(.{
-            .usage = .{ .index_buffer = true },
-            .data = sg.asRange(out.indices.items),
-        });
+        //out.indexBuffer = sg.makeBuffer(.{
+        //    .usage = .{ .index_buffer = true },
+        //    .data = sg.asRange(out.indices.items),
+        //});
 
-        var pip_desc: sg.PipelineDesc = .{
-            .index_type = .UINT32,
-            .shader = sg.makeShader(shd.selectorShaderDesc(sg.queryBackend())),
-            .depth = .{
-                .compare = .LESS_EQUAL,
-                .write_enabled = true,
-            },
-            .cull_mode = .BACK,
-            .alpha_to_coverage_enabled = true,
-            .primitive_type = .LINES,
-        };
+        //var pip_desc: sg.PipelineDesc = .{
+        //    .index_type = .UINT32,
+        //    .shader = sg.makeShader(shd.selectorShaderDesc(sg.queryBackend())),
+        //    .depth = .{
+        //        .compare = .LESS_EQUAL,
+        //        .write_enabled = true,
+        //    },
+        //    .cull_mode = .BACK,
+        //    .alpha_to_coverage_enabled = true,
+        //    .primitive_type = .LINES,
+        //};
 
-        pip_desc.layout.attrs[shd.ATTR_selector_pos].format = .FLOAT3;
-        pip_desc.layout.attrs[shd.ATTR_selector_texcoord0].format = .FLOAT2;
-        out.pip = sg.makePipeline(pip_desc);
+        //pip_desc.layout.attrs[shd.ATTR_selector_pos].format = .FLOAT3;
+        //pip_desc.layout.attrs[shd.ATTR_selector_texcoord0].format = .FLOAT2;
+        //out.pip = sg.makePipeline(pip_desc);
 
-        out.pass_action.colors[0] = .{
-            .load_action = .LOAD,
-        };
+        //out.pass_action.colors[0] = .{
+        //    .load_action = .LOAD,
+        //};
 
         return out;
     }
 
     pub fn render(self: *Self) void {
-        sg.beginPass(.{ .action = self.pass_action, .swapchain = sglue.swapchain() });
+        _ = self;
+        //sg.beginPass(.{ .action = self.pass_action, .swapchain = sglue.swapchain() });
 
-        self.bind.vertex_buffers[0] = self.vertexBuffer;
-        self.bind.index_buffer = self.indexBuffer;
+        //self.bind.vertex_buffers[0] = self.vertexBuffer;
+        //self.bind.index_buffer = self.indexBuffer;
 
-        inline for (.{ self.pos, self.place_pos }) |pos| {
-            const vs_params = shd.VsParams{ .mvp = root.computeVsParams(
-                @floatFromInt(pos.x),
-                @floatFromInt(pos.y),
-                @floatFromInt(pos.z),
-            ) };
+        //inline for (.{ self.pos, self.place_pos }) |pos| {
+        //    const vs_params = shd.VsParams{ .mvp = root.computeVsParams(
+        //        @floatFromInt(pos.x),
+        //        @floatFromInt(pos.y),
+        //        @floatFromInt(pos.z),
+        //    ) };
 
-            sg.applyPipeline(self.pip);
-            sg.applyBindings(self.bind);
+        //    sg.applyPipeline(self.pip);
+        //    sg.applyBindings(self.bind);
 
-            sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
-            sg.draw(0, @intCast(self.indices.items.len), 1);
-        }
-        sg.endPass();
+        //    sg.applyUniforms(shd.UB_vs_params, sg.asRange(&vs_params));
+        //    sg.draw(0, @intCast(self.indices.items.len), 1);
+        //}
+        //sg.endPass();
     }
 
     pub fn deinit(self: *@This()) void {
-        sg.destroyPipeline(self.pip);
+        //sg.destroyPipeline(self.pip);
 
-        sg.destroyBuffer(self.vertexBuffer);
-        sg.destroyBuffer(self.indexBuffer);
+        //sg.destroyBuffer(self.vertexBuffer);
+        //sg.destroyBuffer(self.indexBuffer);
 
         self.vertices.deinit();
         self.indices.deinit();
-    }
-
-    pub fn getVertices(self: *const Self) sg.Buffer {
-        return self.vertices.items;
     }
 
     pub fn getIndices(self: *const Self) []const u32 {
